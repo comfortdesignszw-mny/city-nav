@@ -1,4 +1,4 @@
-import { StatusType } from '../types';
+import { StatusType, Currency } from '../types';
 
 export function formatTimeAgo(timestamp: number): string {
   const diffMs = Date.now() - timestamp;
@@ -15,11 +15,31 @@ export function formatTimeAgo(timestamp: number): string {
   return `${diffDay}d ago`;
 }
 
-export function formatCurrency(amount: number, currency: 'USD' | 'ZWL'): string {
-  if (currency === 'USD') {
-    return `$${amount.toFixed(2)}`;
+export function formatCurrency(amount: number, currency: Currency): string {
+  switch (currency) {
+    case 'USD':
+      return `$${amount.toFixed(2)}`;
+    case 'ZAR':
+      return `R${Math.round(amount) === amount ? amount : amount.toFixed(1)}`;
+    case 'BWP':
+      return `P${Math.round(amount) === amount ? amount : amount.toFixed(1)}`;
+    case 'ZWL':
+    default:
+      return `ZiG ${Math.round(amount)}`;
   }
-  return `ZiG ${Math.round(amount)}`;
+}
+
+export function getCurrencyMeta(currency: Currency): { symbol: string; name: string; regionNote: string } {
+  switch (currency) {
+    case 'USD':
+      return { symbol: '$', name: 'US Dollar (USD)', regionNote: 'Standard nationwide cash fare' };
+    case 'ZAR':
+      return { symbol: 'R', name: 'SA Rand (ZAR)', regionNote: 'Widely used in Bulawayo, Gwanda & Beitbridge' };
+    case 'BWP':
+      return { symbol: 'P', name: 'Botswana Pula (BWP)', regionNote: 'Common in Plumtree, border & Mat South corridors' };
+    case 'ZWL':
+      return { symbol: 'ZiG', name: 'Zimbabwe Gold (ZiG)', regionNote: 'Official local currency' };
+  }
 }
 
 export interface StatusConfig {

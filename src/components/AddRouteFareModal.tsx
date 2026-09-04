@@ -24,13 +24,14 @@ interface AddRouteFareModalProps {
 }
 
 const VEHICLE_TYPES = [
-  { id: 'kombi_15', label: 'Toyota HiAce Kombi (15-seater)', short: 'HiAce Kombi' },
+  { id: 'hiace_combi', label: 'HiAce (Combi 15-seater)', short: 'HiAce (Combi)' },
+  { id: 'mushikashika', label: 'Mushikashika (small taxis / Wish / Sienta)', short: 'Mushikashika' },
+  { id: 'sprinter', label: 'Sprinters (22 Seaters)', short: 'Sprinter (22s)' },
+  { id: 'coach', label: 'Long Distance Coaches (CAG, Inter Africa, City Link)', short: 'Coach' },
+  { id: 'cross_border', label: 'Cross-boarder Quantum (Plumtree / Beitbridge)', short: 'Cross-Border Quantum' },
   { id: 'coaster_minibus', label: 'Minibus / Coaster (18–24 seater)', short: 'Coaster Minibus' },
   { id: 'zupco_bus', label: 'ZUPCO Conventional Big Bus (65–75 seater)', short: 'ZUPCO Big Bus' },
-  { id: 'mushikashika_sedan', label: 'Mushikashika (Toyota Wish / Sienta / Ipsum)', short: 'Mushikashika (Wish)' },
-  { id: 'shared_sedan', label: 'Shared Station Wagon / Probox / Sedan', short: 'Shared Sedan' },
   { id: 'metered_taxi', label: 'Metered City Taxi / Cab', short: 'Metered Taxi' },
-  { id: 'intercity_coach', label: 'Intercity Coach (CAG, Inter Africa, City Link)', short: 'Intercity Coach' },
 ];
 
 const DEPARTURE_STATUSES = [
@@ -44,6 +45,7 @@ const DEPARTURE_STATUSES = [
 const CITIES = [
   'Harare',
   'Bulawayo',
+  'Plumtree',
   'Chitungwiza',
   'Gweru',
   'Mutare',
@@ -330,59 +332,69 @@ export const AddRouteFareModal: React.FC<AddRouteFareModalProps> = ({
 
             {/* Live Fare & Currency */}
             <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414]">
-              <label className="block text-[10px] font-black uppercase tracking-wider text-[#141414] mb-1.5 flex items-center gap-1.5">
-                <DollarSign className="w-3.5 h-3.5 text-[#F27D26]" />
-                <span>Current Fare Charged *</span>
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[10px] font-black uppercase tracking-wider text-[#141414] flex items-center gap-1.5">
+                  <DollarSign className="w-3.5 h-3.5 text-[#F27D26]" />
+                  <span>Current Fare Charged *</span>
+                </label>
+                <span className="text-[9px] font-bold text-stone-500">
+                  Rands (Byo) • Pula (Plumtree)
+                </span>
+              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
-                <div className="flex gap-2">
+              <div className="grid grid-cols-4 gap-1.5 mb-2">
+                {(['USD', 'ZWL', 'ZAR', 'BWP'] as Currency[]).map((curr) => (
                   <button
+                    key={curr}
                     type="button"
-                    onClick={() => setCurrency('USD')}
-                    className={`flex-1 py-2 text-xs font-black uppercase border-2 border-[#141414] transition cursor-pointer ${
-                      currency === 'USD' ? 'bg-[#141414] text-white shadow-[2px_2px_0px_0px_#F27D26]' : 'bg-white text-[#141414]'
+                    onClick={() => {
+                      setCurrency(curr);
+                      if (curr === 'USD') setFareAmount('1.00');
+                      if (curr === 'ZWL') setFareAmount('25');
+                      if (curr === 'ZAR') setFareAmount('15');
+                      if (curr === 'BWP') setFareAmount('20');
+                    }}
+                    className={`py-1.5 text-xs font-black uppercase border-2 border-[#141414] transition cursor-pointer ${
+                      currency === curr ? 'bg-[#141414] text-white shadow-[2px_2px_0px_0px_#F27D26]' : 'bg-white text-[#141414]'
                     }`}
                   >
-                    USD ($)
+                    {curr === 'USD' ? 'USD ($)' : curr === 'ZWL' ? 'ZiG' : curr === 'ZAR' ? 'Rand (R)' : 'Pula (P)'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setCurrency('ZWL')}
-                    className={`flex-1 py-2 text-xs font-black uppercase border-2 border-[#141414] transition cursor-pointer ${
-                      currency === 'ZWL' ? 'bg-[#141414] text-white shadow-[2px_2px_0px_0px_#F27D26]' : 'bg-white text-[#141414]'
-                    }`}
-                  >
-                    ZiG (ZWL)
-                  </button>
-                </div>
+                ))}
+              </div>
 
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500 font-black text-xs">
-                    {currency === 'USD' ? '$' : 'ZiG'}
-                  </span>
-                  <input
-                    type="number"
-                    step="any"
-                    value={fareAmount}
-                    onChange={(e) => setFareAmount(e.target.value)}
-                    placeholder="1.00"
-                    className="w-full pl-10 pr-3 py-2 bg-white border-2 border-[#141414] font-black text-sm focus:outline-none"
-                    required
-                  />
-                </div>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500 font-black text-xs">
+                  {currency === 'USD' ? '$' : currency === 'ZWL' ? 'ZiG' : currency === 'ZAR' ? 'R' : 'P'}
+                </span>
+                <input
+                  type="number"
+                  step="any"
+                  value={fareAmount}
+                  onChange={(e) => setFareAmount(e.target.value)}
+                  placeholder="1.00"
+                  className="w-full pl-10 pr-3 py-2 bg-white border-2 border-[#141414] font-black text-sm focus:outline-none"
+                  required
+                />
               </div>
 
               {/* Quick Preset Buttons */}
               <div className="flex gap-1.5 mt-2 overflow-x-auto">
-                {(currency === 'USD' ? ['0.50', '0.75', '1.00', '1.50', '2.00'] : ['14', '20', '28', '42', '55']).map((val) => (
+                {(currency === 'USD' 
+                  ? ['0.50', '0.75', '1.00', '1.50', '2.00'] 
+                  : currency === 'ZAR' 
+                  ? ['10', '15', '20', '30', '50'] 
+                  : currency === 'BWP' 
+                  ? ['10', '15', '20', '25', '50'] 
+                  : ['14', '20', '28', '42', '55']
+                ).map((val) => (
                   <button
                     key={val}
                     type="button"
                     onClick={() => setFareAmount(val)}
                     className="px-2.5 py-1 bg-white border border-[#141414] text-[10px] font-black hover:bg-[#F27D26] hover:text-white transition cursor-pointer"
                   >
-                    {currency === 'USD' ? `$${val}` : `${val} ZiG`}
+                    {currency === 'USD' ? `$${val}` : currency === 'ZAR' ? `R${val}` : currency === 'BWP' ? `P${val}` : `${val} ZiG`}
                   </button>
                 ))}
               </div>

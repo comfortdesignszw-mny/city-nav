@@ -1,4 +1,4 @@
-export type Currency = 'USD' | 'ZWL';
+export type Currency = 'USD' | 'ZWL' | 'ZAR' | 'BWP';
 
 export type StatusType = 
   | 'running'
@@ -22,12 +22,91 @@ export interface RouteItem {
   origin: string;
   destination: string;
   waypoints: Waypoint[];
-  city: string; // e.g. "Harare", "Bulawayo", "Gweru", "Kwekwe", "Mutare", "Kadoma", "Masvingo", "Marondera", "Bindura", "Gwanda"
+  city: string; // e.g. "Harare", "Bulawayo", "Gweru", "Kwekwe", "Mutare", "Kadoma", "Masvingo", "Marondera", "Bindura", "Gwanda", "Plumtree"
   province?: string;
   category?: RouteCategory; // 'cbd_location' (CBD to locations/suburbs) or 'near_town' (inter-urban / near town transport)
   distanceKm?: number;
   commonVehicle?: string; // e.g. "Toyota HiAce Kombi", "Sprinter", "Mushikashika (Wish/Sienta)"
   ranksServedIds: string[];
+}
+
+export type TransporterVehicleType = 
+  | 'hiace_combi' // HiAce (Combi)
+  | 'mushikashika' // Mushikashika (small taxis / Wish / Sienta)
+  | 'sprinter_22' // Sprinters (22 Seaters)
+  | 'intercity_coach' // Long Distance Coaches
+  | 'cross_border_quantum' // Cross-boarder Quantum
+  | 'metered_taxi'; // Metered City Taxi / Cab
+
+export interface TransporterProfile {
+  id: string;
+  operatorName: string; // Name or Transport Business Name
+  contactPhone: string; // Phone number with WhatsApp capability
+  transportType: TransporterVehicleType;
+  transportTypeLabel: string; // Readable label
+  currentRouteName: string; // Route they always serve (e.g. "Bulawayo CBD ⇄ Cowdray Park")
+  currentRouteId?: string;
+  city: string;
+  vehiclePlate?: string; // e.g. "AEK 3942"
+  baseTerminus?: string; // e.g. "Egodini Rank", "Copacabana", "Plumtree Rank"
+  status: 'active' | 'loading' | 'available_hire' | 'off_duty';
+  statusNote?: string;
+  registeredAt: number;
+  lastRouteUpdate: number;
+  registeredByDeviceId: string;
+  username?: string;
+  userHandle?: string;
+  likes: number;
+  userLiked?: boolean;
+}
+
+export type AbuseCategory = 
+  | 'overcharging' 
+  | 'reckless_driving' 
+  | 'tout_harassment' 
+  | 'overloading' 
+  | 'refusing_currency' 
+  | 'off_route';
+
+export interface AmenityFeedback {
+  ac?: boolean; // Air conditioning
+  usb?: boolean; // USB charging
+  wifi?: boolean; // On-board Wi-Fi
+  reclining?: boolean; // Reclining seats
+  luggage?: boolean; // Secure luggage
+  toilet?: boolean; // On-board restroom
+  refreshments?: boolean; // Water / Refreshments
+  tv?: boolean; // Entertainment screen
+}
+
+export interface CommuterSocialInteraction {
+  id: string;
+  targetType: 'route' | 'intercity' | 'operator' | 'rank' | 'transporter';
+  targetId: string;
+  targetName: string;
+  username: string;
+  userHandle: string;
+  userBadge: string;
+  avatarBg: string;
+  comment: string;
+  rating?: number; // 1-5 stars
+  likes: number;
+  dislikes: number;
+  userReaction?: 'like' | 'dislike';
+  createdAt: number;
+  deviceId: string;
+  
+  // Optional enrichments
+  confirmedFare?: {
+    amount: number;
+    currency: Currency;
+  };
+  confirmedDepartureTime?: string; // e.g. "07:15 AM - Departed on time"
+  amenitiesReview?: AmenityFeedback;
+  isAbuseReport?: boolean;
+  abuseType?: AbuseCategory;
+  abuseLocation?: string;
+  abusePlateNumber?: string;
 }
 
 export type TransportType = 
@@ -62,6 +141,8 @@ export interface FareReport {
   departure_status?: string; // e.g. "Loading now / Depart in 5 mins", "Full & Leaving"
   route_name?: string;
   city?: string;
+  reporter_username?: string;
+  reporter_badge?: string;
 }
 
 export interface StatusReport {
@@ -72,6 +153,7 @@ export interface StatusReport {
   reported_at: number; // unix timestamp ms
   expires_at: number; // default 90 min from report
   reporter_device_id: string;
+  reporter_username?: string;
   source?: 'seeded' | 'user' | 'peer';
 }
 
@@ -89,6 +171,11 @@ export interface Rank {
 
 export interface UserProfile {
   device_id: string;
+  username: string; // e.g. "Tinashe_Zw"
+  handle: string; // e.g. "@tinashe_zw"
+  avatarColor: string; // Hex color for avatar
+  commuterBadge: string; // e.g. "Daily Commuter", "Route Scout", "Transporter"
+  role: 'commuter' | 'transporter';
   phone?: string;
   reputation_score: number;
   reports_count: number;
@@ -178,4 +265,6 @@ export interface ActiveRouteSummary {
   confidenceReason: string;
   averageFareUSD?: number;
   averageFareZWL?: number;
+  averageFareZAR?: number;
+  averageFareBWP?: number;
 }

@@ -4,9 +4,11 @@
  */
 
 import React, { useState } from 'react';
-import { Header } from './components/Header';
+import { Header, NavTab } from './components/Header';
 import { HomeRouteSearch } from './components/HomeRouteSearch';
 import { IntercityTravelView } from './components/IntercityTravelView';
+import { TransportersView } from './components/TransportersView';
+import { SocialInteractionsView } from './components/SocialInteractionsView';
 import { RankFinderView } from './components/RankFinderView';
 import { MyReportsView } from './components/MyReportsView';
 import { RouteDetailModal } from './components/RouteDetailModal';
@@ -14,7 +16,7 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { Info, Bus, ShieldCheck, Zap } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'routes' | 'intercity' | 'ranks' | 'my-reports'>('routes');
+  const [activeTab, setActiveTab] = useState<NavTab>('routes');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [selectedRankId, setSelectedRankId] = useState<string | null>(null);
   const [showWelcomeNotice, setShowWelcomeNotice] = useState(true);
@@ -53,7 +55,7 @@ export default function App() {
                     </span>
                   </div>
                   <p className="text-xs sm:text-sm font-medium text-stone-300 leading-snug max-w-2xl">
-                    Crowdsourced transit intelligence for Zimbabwe. Instant cached load, live USD &amp; ZiG fares, intercity long-distance buses (CAG, City Link, Inter Africa), ranks, and police blitz alerts. Zero signup wall.
+                    Crowdsourced transit intelligence for Zimbabwe. Instant cached load, live multi-currency fares (USD, ZiG, Rand, Pula), verified transporters &amp; kombis, coach amenities &amp; abuse reports, GPS terminus finder, and police blitz alerts.
                   </p>
                 </div>
               </div>
@@ -83,7 +85,17 @@ export default function App() {
           />
         )}
 
-        {/* Tab 3: Ranks Map & Termini */}
+        {/* Tab 3: Transporters & Operators Registry */}
+        {activeTab === 'transporters' && (
+          <TransportersView />
+        )}
+
+        {/* Tab 4: Commuter Buzz & Social Interactions Feed */}
+        {activeTab === 'buzz' && (
+          <SocialInteractionsView onSelectRoute={handleSelectRoute} />
+        )}
+
+        {/* Tab 5: Ranks Map & Lightweight GPS Termini */}
         {activeTab === 'ranks' && (
           <RankFinderView
             onSelectRoute={handleSelectRoute}
@@ -91,7 +103,7 @@ export default function App() {
           />
         )}
 
-        {/* Tab 4: My Reports & Outbox */}
+        {/* Tab 6: My Reports & Outbox */}
         {activeTab === 'my-reports' && (
           <MyReportsView 
             onSelectRoute={handleSelectRoute}

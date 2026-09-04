@@ -22,11 +22,15 @@ import {
   Filter, 
   Layers, 
   Building2, 
-  Sparkles 
+  Sparkles,
+  MessageSquare,
+  ShieldAlert,
+  Coins
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
 import { BusOperator, IntercityRoute, IntercityReport, OperatorTier } from '../types';
 import { ReportIntercityModal } from './ReportIntercityModal';
+import { AddReviewAbuseModal } from './AddReviewAbuseModal';
 import { formatTimeAgo, formatCurrency } from '../utils/formatters';
 
 interface IntercityTravelViewProps {
@@ -38,14 +42,28 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
   const routes = store.getIntercityRoutes();
   const operators = store.getBusOperators();
   const reports = store.getIntercityReports();
+  const socialInteractions = store.getAllSocialInteractions();
 
-  const [activeTab, setActiveTab] = useState<'corridors' | 'operators' | 'reports'>('corridors');
+  const [activeTab, setActiveTab] = useState<'corridors' | 'operators' | 'reports' | 'buzz'>('corridors');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCityFilter, setSelectedCityFilter] = useState<string>('all');
   const [selectedTierFilter, setSelectedTierFilter] = useState<string>('all');
   const [isReportModalOpen, setIsReportModalOpen] = useState<boolean>(false);
   const [selectedRouteForReport, setSelectedRouteForReport] = useState<string | undefined>(undefined);
   const [selectedOperatorForReport, setSelectedOperatorForReport] = useState<string | undefined>(undefined);
+
+  // Social review & abuse modal state
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [reviewTarget, setReviewTarget] = useState<{ type: 'intercity' | 'operator'; id: string; name: string }>({
+    type: 'intercity',
+    id: '',
+    name: ''
+  });
+
+  const handleOpenReviewModal = (type: 'intercity' | 'operator', id: string, name: string) => {
+    setReviewTarget({ type, id, name });
+    setIsReviewModalOpen(true);
+  };
 
   // Filter routes
   const filteredRoutes = useMemo(() => {
@@ -221,7 +239,20 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
           }`}
         >
           <CheckCircle2 className="w-4 h-4 text-[#F27D26]" />
-          <span>Passenger Reports ({reports.length})</span>
+          <span>Trip Reports ({reports.length})</span>
+        </button>
+
+        <button
+          id="tab-buzz-btn"
+          onClick={() => setActiveTab('buzz')}
+          className={`py-3 px-2 sm:px-4 text-xs font-black uppercase tracking-wider border-2 border-[#141414] transition flex items-center justify-center gap-2 cursor-pointer ${
+            activeTab === 'buzz'
+              ? 'bg-[#141414] text-white shadow-[3px_3px_0px_0px_#F27D26]'
+              : 'bg-white text-[#141414] hover:bg-[#F5F5F0]'
+          }`}
+        >
+          <MessageSquare className="w-4 h-4 text-[#F27D26]" />
+          <span>Coach Buzz &amp; Reviews ({socialInteractions.filter(i => i.targetType === 'intercity' || i.targetType === 'operator').length})</span>
         </button>
       </div>
 
@@ -356,12 +387,21 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
                     <div className="text-2xl font-black text-[#141414]">
                       ${route.fareRange.min} – ${route.fareRange.max} USD
                     </div>
-                    <button
-                      onClick={() => handleOpenReportModal(route.id)}
-                      className="mt-1.5 px-2.5 py-1 bg-[#F5F5F0] hover:bg-[#F27D26] hover:text-white text-[10px] font-black uppercase border border-[#141414] transition cursor-pointer"
-                    >
-                      + Report Trip Fare
-                    </button>
+                    <div className="mt-1.5 flex items-center justify-end gap-1.5 flex-wrap">
+                      <button
+                        onClick={() => handleOpenReviewModal('intercity', route.id, route.name)}
+                        className="px-2.5 py-1 bg-[#141414] text-white hover:bg-[#F27D26] text-[10px] font-black uppercase border border-[#141414] transition cursor-pointer flex items-center gap-1"
+                      >
+                        <MessageSquare className="w-3 h-3" />
+                        <span>Rate &amp; Review</span>
+                      </button>
+                      <button
+                        onClick={() => handleOpenReportModal(route.id)}
+                        className="px-2.5 py-1 bg-[#F5F5F0] hover:bg-stone-200 text-[#141414] text-[10px] font-black uppercase border border-[#141414] transition cursor-pointer"
+                      >
+                        + Report Trip Fare
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -536,15 +576,19 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
                 </div>
 
                 {/* Bottom Action */}
-                <div className="pt-3 border-t-2 border-[#141414]/10 flex items-center justify-between">
-                  <div className="text-[10px] font-black uppercase text-[#141414]/60">
-                    {operator.popularRoutes.length} Main Corridors
-                  </div>
+                <div className="pt-3 border-t-2 border-[#141414]/10 flex items-center justify-between gap-2 flex-wrap">
+                  <button
+                    onClick={() => handleOpenReviewModal('operator', operator.id, operator.name)}
+                    className="px-3 py-1.5 bg-[#141414] hover:bg-[#F27D26] text-white text-xs font-black uppercase border border-[#141414] transition cursor-pointer flex items-center gap-1.5 shadow-[2px_2px_0px_0px_#F27D26]"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span>Rate / Buzz &amp; Amenities</span>
+                  </button>
                   <button
                     onClick={() => handleOpenReportModal(undefined, operator.id)}
-                    className="px-3 py-1.5 bg-[#141414] hover:bg-[#F27D26] text-white text-xs font-black uppercase border border-[#141414] transition cursor-pointer shadow-[2px_2px_0px_0px_#F27D26]"
+                    className="px-3 py-1.5 bg-[#F5F5F0] hover:bg-stone-200 text-[#141414] text-xs font-black uppercase border border-[#141414] transition cursor-pointer"
                   >
-                    + Report Fare for {operator.alias || operator.name.split(' ')[0]}
+                    + Report Fare
                   </button>
                 </div>
               </div>
@@ -685,6 +729,176 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
         </div>
       )}
 
+      {/* VIEW 4: COACH BUZZ & SOCIAL REVIEWS (Amenities, Star Ratings, Abuse Alert) */}
+      {activeTab === 'buzz' && (
+        <div className="space-y-4">
+          <div className="bg-white p-4 border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-black uppercase text-[#141414] flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-[#F27D26]" />
+                <span>Intercity Commuter Buzz &amp; Abuse Reports</span>
+              </h3>
+              <p className="text-xs font-bold text-stone-600">
+                Rate coaches, confirm departing times &amp; amenities (AC, Wi-Fi, USB), and report luggage loss or reckless driving.
+              </p>
+            </div>
+            <button
+              onClick={() => handleOpenReviewModal('intercity', routes[0]?.id || 'route-harare-bulawayo', routes[0]?.name || 'Harare to Bulawayo')}
+              className="px-4 py-2 bg-[#141414] text-white hover:bg-[#F27D26] text-xs font-black uppercase border-2 border-[#141414] transition cursor-pointer shadow-[3px_3px_0px_0px_#F27D26] whitespace-nowrap"
+            >
+              + Post Coach Buzz / Report
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            {socialInteractions
+              .filter((i) => i.targetType === 'intercity' || i.targetType === 'operator')
+              .length === 0 ? (
+              <div className="p-8 text-center bg-white border-2 border-[#141414]">
+                <MessageSquare className="w-10 h-10 text-stone-400 mx-auto mb-2" />
+                <h4 className="text-sm font-black text-[#141414] uppercase">No Coach Buzz Yet</h4>
+                <p className="text-xs font-bold text-stone-500 mt-1">
+                  Be the first to rate your intercity trip or review coach amenities!
+                </p>
+              </div>
+            ) : (
+              socialInteractions
+                .filter((i) => i.targetType === 'intercity' || i.targetType === 'operator')
+                .map((buzz) => {
+                  const isAbuse = buzz.isAbuseReport;
+                  return (
+                    <div
+                      key={buzz.id}
+                      className={`bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414] p-4 ${
+                        isAbuse ? 'border-l-8 border-l-[#EF4444]' : ''
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            className="w-8 h-8 flex items-center justify-center font-black text-white text-xs border border-[#141414]"
+                            style={{ backgroundColor: buzz.avatarBg || '#F27D26' }}
+                          >
+                            {buzz.username.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-black text-xs text-[#141414]">{buzz.username}</span>
+                              <span className="text-[10px] text-stone-400 font-bold">{buzz.userHandle}</span>
+                              {buzz.userBadge && (
+                                <span className="bg-[#141414] text-white px-1.5 py-0.2 text-[8px] font-black uppercase">
+                                  {buzz.userBadge}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-stone-500 font-bold">
+                              on <strong className="text-[#141414] uppercase">{buzz.targetName}</strong> • {formatTimeAgo(buzz.createdAt)}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Rating or Alert */}
+                        {isAbuse ? (
+                          <span className="bg-[#EF4444] text-white px-2 py-0.5 text-[9px] font-black uppercase flex items-center gap-1">
+                            <ShieldAlert className="w-3 h-3" />
+                            Abuse Alert
+                          </span>
+                        ) : buzz.rating ? (
+                          <div className="flex items-center gap-0.5">
+                            {[1, 2, 3, 4, 5].map((star) => (
+                              <Star
+                                key={star}
+                                className={`w-3.5 h-3.5 ${
+                                  star <= buzz.rating! ? 'fill-[#F27D26] text-[#141414]' : 'text-stone-200'
+                                }`}
+                              />
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <p className="text-xs font-bold text-stone-800 leading-relaxed my-2">
+                        {buzz.comment}
+                      </p>
+
+                      {/* Confirmed Amenities Pill */}
+                      {buzz.amenitiesReview && (
+                        <div className="p-2 bg-[#F5F5F0] border border-stone-300 text-[10px] font-black uppercase flex items-center gap-2 flex-wrap mb-2">
+                          <span className="text-stone-500">Reported Amenities:</span>
+                          <span className={buzz.amenitiesReview.acWorking ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-stone-400 bg-stone-200 px-1.5 py-0.5'}>
+                            AC: {buzz.amenitiesReview.acWorking ? 'Working' : 'Off'}
+                          </span>
+                          <span className={buzz.amenitiesReview.usbCharging ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-stone-400 bg-stone-200 px-1.5 py-0.5'}>
+                            USB: {buzz.amenitiesReview.usbCharging ? 'Charging' : 'Faulty'}
+                          </span>
+                          <span className={buzz.amenitiesReview.wifiWorking ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-stone-400 bg-stone-200 px-1.5 py-0.5'}>
+                            Wi-Fi: {buzz.amenitiesReview.wifiWorking ? 'Connected' : 'No'}
+                          </span>
+                          <span className={buzz.amenitiesReview.luggageSecurity ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-red-700 bg-red-100 px-1.5 py-0.5'}>
+                            Luggage: {buzz.amenitiesReview.luggageSecurity ? 'Safe' : 'Risky'}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Confirmed Fare & Time */}
+                      <div className="flex items-center gap-2 flex-wrap mb-2">
+                        {buzz.confirmedFare && (
+                          <span className="px-2 py-0.5 bg-emerald-50 border border-emerald-300 text-emerald-900 text-[10px] font-black uppercase flex items-center gap-1">
+                            <Coins className="w-3 h-3 text-emerald-600" />
+                            <span>Confirmed Fare: {formatCurrency(buzz.confirmedFare.amount, buzz.confirmedFare.currency)}</span>
+                          </span>
+                        )}
+                        {buzz.confirmedDepartureTime && (
+                          <span className="px-2 py-0.5 bg-blue-50 border border-blue-300 text-blue-900 text-[10px] font-black uppercase flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-blue-600" />
+                            <span>Boarded: {buzz.confirmedDepartureTime}</span>
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Social Reaction Buttons */}
+                      <div className="flex items-center justify-between pt-2 border-t border-stone-100 text-xs">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => store.reactSocialInteraction(buzz.id, 'like')}
+                            className={`px-2 py-1 text-xs font-black uppercase border border-[#141414] transition cursor-pointer flex items-center gap-1 ${
+                              buzz.userReaction === 'like'
+                                ? 'bg-[#141414] text-[#F27D26] shadow-[1px_1px_0px_0px_#F27D26]'
+                                : 'bg-[#F5F5F0] text-stone-700 hover:bg-white'
+                            }`}
+                          >
+                            <ThumbsUp className="w-3.5 h-3.5" />
+                            <span>{buzz.likes}</span>
+                          </button>
+
+                          <button
+                            onClick={() => store.reactSocialInteraction(buzz.id, 'dislike')}
+                            className={`px-2 py-1 text-xs font-black uppercase border border-[#141414] transition cursor-pointer flex items-center gap-1 ${
+                              buzz.userReaction === 'dislike'
+                                ? 'bg-[#EF4444] text-white'
+                                : 'bg-[#F5F5F0] text-stone-700 hover:bg-white'
+                            }`}
+                          >
+                            <ThumbsDown className="w-3.5 h-3.5" />
+                            <span>{buzz.dislikes}</span>
+                          </button>
+                        </div>
+
+                        <button
+                          onClick={() => handleOpenReviewModal(buzz.targetType, buzz.targetId, buzz.targetName)}
+                          className="text-[10px] font-black uppercase text-[#F27D26] hover:underline cursor-pointer"
+                        >
+                          + Reply / Add Review
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Report Intercity Modal */}
       <ReportIntercityModal
         isOpen={isReportModalOpen}
@@ -692,6 +906,17 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
         defaultRouteId={selectedRouteForReport}
         defaultOperatorId={selectedOperatorForReport}
       />
+
+      {/* Social Review / Amenity / Abuse Modal */}
+      {isReviewModalOpen && (
+        <AddReviewAbuseModal
+          isOpen={isReviewModalOpen}
+          onClose={() => setIsReviewModalOpen(false)}
+          targetType={reviewTarget.type}
+          targetId={reviewTarget.id}
+          targetName={reviewTarget.name}
+        />
+      )}
     </div>
   );
 };

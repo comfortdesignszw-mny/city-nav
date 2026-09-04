@@ -9,13 +9,19 @@ import {
   UserCheck, 
   RefreshCw,
   Sparkles,
-  Smartphone
+  Smartphone,
+  Car,
+  MessageSquare,
+  User
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
+import { UserProfileModal } from './UserProfileModal';
+
+export type NavTab = 'routes' | 'intercity' | 'transporters' | 'buzz' | 'ranks' | 'my-reports';
 
 interface HeaderProps {
-  activeTab: 'routes' | 'intercity' | 'ranks' | 'my-reports';
-  setActiveTab: (tab: 'routes' | 'intercity' | 'ranks' | 'my-reports') => void;
+  activeTab: NavTab;
+  setActiveTab: (tab: NavTab) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
@@ -23,13 +29,15 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
   const isOnline = store.isEffectivelyOnline();
   const isSimulated = store.isOfflineSimulated();
   const pendingCount = store.getPendingWritesCount();
+  const profile = store.getUserProfile();
   const [showSimInfo, setShowSimInfo] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
   return (
     <header className="sticky top-0 z-40 bg-[#F5F5F0] text-[#141414] border-b-2 border-[#141414]">
       {/* Top Brand & Status Bar */}
-      <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2 sm:gap-3">
+      <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 sm:gap-3 cursor-pointer" onClick={() => setActiveTab('routes')}>
           <div className="w-10 h-10 bg-[#141414] text-white border-2 border-[#141414] flex items-center justify-center font-black shadow-[2px_2px_0px_0px_#F27D26] flex-shrink-0">
             <Bus className="w-5 h-5 text-[#F27D26]" />
           </div>
@@ -47,13 +55,28 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
           </div>
         </div>
 
-        {/* Connectivity & Outbox Indicators */}
+        {/* User Profile Pill & Connectivity */}
         <div className="flex items-center gap-2">
+          {/* Commuter Profile Pill */}
+          <button
+            onClick={() => setIsProfileModalOpen(true)}
+            className="flex items-center gap-1.5 bg-white border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] px-2.5 py-1 text-xs font-black uppercase hover:bg-[#F27D26] hover:text-white transition cursor-pointer"
+            title="Edit commuter handle & badge"
+          >
+            <div 
+              className="w-4 h-4 text-[9px] font-black text-white flex items-center justify-center border border-[#141414]"
+              style={{ backgroundColor: profile.avatarColor || '#F27D26' }}
+            >
+              {profile.username ? profile.username.charAt(0).toUpperCase() : 'U'}
+            </div>
+            <span className="hidden xs:inline">{profile.userHandle || '@commuter'}</span>
+          </button>
+
           {/* Outbox Badge */}
           {pendingCount > 0 && (
             <button
               onClick={() => setActiveTab('my-reports')}
-              className="flex items-center gap-1.5 bg-[#F27D26] text-white border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] px-2.5 py-1 text-xs font-black uppercase tracking-wider hover:bg-[#d96615] transition active:translate-x-[1px] active:translate-y-[1px] active:shadow-none"
+              className="flex items-center gap-1.5 bg-[#F27D26] text-white border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] px-2.5 py-1 text-xs font-black uppercase tracking-wider hover:bg-[#d96615] transition active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer"
               title="Writes queued in Outbox awaiting background sync"
             >
               <CloudUpload className="w-3.5 h-3.5" />
@@ -65,7 +88,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
           <div className="relative">
             <button
               onClick={() => setShowSimInfo(!showSimInfo)}
-              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-black uppercase tracking-widest border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] transition active:translate-x-[1px] active:translate-y-[1px] active:shadow-none ${
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-black uppercase tracking-widest border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] transition cursor-pointer active:translate-x-[1px] active:translate-y-[1px] active:shadow-none ${
                 isOnline
                   ? 'bg-[#141414] text-white hover:bg-[#F27D26]'
                   : 'bg-[#F27D26] text-white hover:bg-[#141414]'
@@ -96,7 +119,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                   </span>
                   <button 
                     onClick={() => setShowSimInfo(false)}
-                    className="text-[#141414] hover:text-[#F27D26] text-base font-black"
+                    className="text-[#141414] hover:text-[#F27D26] text-base font-black cursor-pointer"
                   >
                     ✕
                   </button>
@@ -109,7 +132,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                     <span className="text-[#141414] font-bold">Simulate Zero Data:</span>
                     <button
                       onClick={() => store.setOfflineSimulation(!isSimulated)}
-                      className={`px-2.5 py-1 text-xs font-black uppercase border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] transition ${
+                      className={`px-2.5 py-1 text-xs font-black uppercase border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] transition cursor-pointer ${
                         isSimulated
                           ? 'bg-rose-600 text-white'
                           : 'bg-white text-[#141414] hover:bg-[#F27D26] hover:text-white'
@@ -125,7 +148,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                       store.flushOutbox();
                       setShowSimInfo(false);
                     }}
-                    className="w-full flex items-center justify-center gap-1.5 py-2 bg-[#141414] text-white uppercase font-black tracking-wider text-xs border-2 border-[#141414] hover:bg-[#F27D26] transition shadow-[2px_2px_0px_0px_#141414]"
+                    className="w-full flex items-center justify-center gap-1.5 py-2 bg-[#141414] text-white uppercase font-black tracking-wider text-xs border-2 border-[#141414] hover:bg-[#F27D26] transition shadow-[2px_2px_0px_0px_#141414] cursor-pointer"
                   >
                     <RefreshCw className="w-3.5 h-3.5" /> Force Flush Outbox ({pendingCount})
                   </button>
@@ -140,44 +163,70 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
       <div className="max-w-4xl mx-auto px-2 sm:px-4 flex border-t-2 border-[#141414] bg-[#F5F5F0] overflow-x-auto scrollbar-none">
         <button
           onClick={() => setActiveTab('routes')}
-          className={`flex-1 min-w-[110px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
+          className={`flex-1 min-w-[105px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
             activeTab === 'routes'
               ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
               : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'
           }`}
         >
           <ListOrdered className="w-3.5 h-3.5 flex-shrink-0" />
-          <span className="truncate">Routes &amp; Fares</span>
+          <span className="truncate">Routes</span>
         </button>
 
         <button
           id="nav-intercity-tab"
           onClick={() => setActiveTab('intercity')}
-          className={`flex-1 min-w-[125px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
+          className={`flex-1 min-w-[115px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
             activeTab === 'intercity'
               ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
               : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'
           }`}
         >
           <Bus className="w-3.5 h-3.5 text-[#F27D26] flex-shrink-0" />
-          <span className="truncate">Intercity Buses</span>
+          <span className="truncate">Intercity</span>
+        </button>
+
+        <button
+          id="nav-transporters-tab"
+          onClick={() => setActiveTab('transporters')}
+          className={`flex-1 min-w-[125px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
+            activeTab === 'transporters'
+              ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
+              : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'
+          }`}
+        >
+          <Car className="w-3.5 h-3.5 text-[#F27D26] flex-shrink-0" />
+          <span className="truncate">Transporters</span>
+        </button>
+
+        <button
+          id="nav-buzz-tab"
+          onClick={() => setActiveTab('buzz')}
+          className={`flex-1 min-w-[125px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
+            activeTab === 'buzz'
+              ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
+              : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'
+          }`}
+        >
+          <MessageSquare className="w-3.5 h-3.5 text-[#F27D26] flex-shrink-0" />
+          <span className="truncate">Commuter Buzz</span>
         </button>
 
         <button
           onClick={() => setActiveTab('ranks')}
-          className={`flex-1 min-w-[110px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
+          className={`flex-1 min-w-[105px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
             activeTab === 'ranks'
               ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
               : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'
           }`}
         >
           <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
-          <span className="truncate">Ranks &amp; Termini</span>
+          <span className="truncate">Ranks &amp; GPS</span>
         </button>
 
         <button
           onClick={() => setActiveTab('my-reports')}
-          className={`flex-1 min-w-[100px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition cursor-pointer ${
+          className={`flex-1 min-w-[95px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition cursor-pointer ${
             activeTab === 'my-reports'
               ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
               : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'
@@ -190,6 +239,14 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
           )}
         </button>
       </div>
+
+      {/* User Profile Modal */}
+      {isProfileModalOpen && (
+        <UserProfileModal
+          isOpen={isProfileModalOpen}
+          onClose={() => setIsProfileModalOpen(false)}
+        />
+      )}
     </header>
   );
 };

@@ -12,7 +12,12 @@ import {
   BusOperator,
   IntercityRoute,
   IntercityReport,
-  UserLocation
+  UserLocation,
+  TransporterProfile,
+  TransporterVehicleType,
+  CommuterSocialInteraction,
+  AmenityFeedback,
+  AbuseCategory
 } from '../types';
 import { 
   SEED_RANKS, 
@@ -27,6 +32,8 @@ import {
   INTERCITY_ROUTES,
   SEED_INTERCITY_REPORTS
 } from '../data/intercityData';
+import { SEED_TRANSPORTERS } from '../data/transportersData';
+import { SEED_SOCIAL_INTERACTIONS } from '../data/socialInteractionsData';
 import { DEFAULT_USER_LOCATION } from '../utils/geoUtils';
 
 const STORAGE_KEYS = {
@@ -43,6 +50,8 @@ const STORAGE_KEYS = {
   BUS_OPERATORS: 'fambai_bus_operators',
   INTERCITY_ROUTES: 'fambai_intercity_routes',
   INTERCITY_REPORTS: 'fambai_intercity_reports',
+  TRANSPORTERS: 'fambai_transporters',
+  SOCIAL_INTERACTIONS: 'fambai_social_interactions',
 };
 
 // Generate UUID for anonymous device identification
@@ -89,6 +98,8 @@ class FambaiOfflineStore {
   private busOperators: BusOperator[] = [];
   private intercityRoutes: IntercityRoute[] = [];
   private intercityReports: IntercityReport[] = [];
+  private transporters: TransporterProfile[] = [];
+  private socialInteractions: CommuterSocialInteraction[] = [];
   private outbox: PendingWrite[] = [];
   private userLocation: UserLocation;
   private simulatedOffline: boolean = false;
@@ -107,13 +118,27 @@ class FambaiOfflineStore {
     // 1. Instant Cache Hydration from Local SQLite/LocalStorage representation
     this.initFromLocalCache();
 
-    // 2. Setup user profile
+    // 2. Setup user profile with friendly default username & handle
     const existingProfile = safeGet<UserProfile | null>(STORAGE_KEYS.USER_PROFILE, null);
+    const defaultSuffix = this.deviceId.slice(-4).toUpperCase();
     if (existingProfile) {
-      this.userProfile = existingProfile;
+      this.userProfile = {
+        ...existingProfile,
+        username: existingProfile.username || `Commuter_${defaultSuffix}`,
+        handle: existingProfile.handle || `@commuter_${defaultSuffix.toLowerCase()}`,
+        avatarColor: existingProfile.avatarColor || '#F27D26',
+        commuterBadge: existingProfile.commuterBadge || 'Daily Commuter',
+        role: existingProfile.role || 'commuter',
+      };
+      safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
     } else {
       this.userProfile = {
         device_id: this.deviceId,
+        username: `Commuter_${defaultSuffix}`,
+        handle: `@commuter_${defaultSuffix.toLowerCase()}`,
+        avatarColor: '#F27D26',
+        commuterBadge: 'Daily Commuter',
+        role: 'commuter',
         reputation_score: 100,
         reports_count: 0,
         createdAt: Date.now(),
@@ -198,6 +223,28 @@ class FambaiOfflineStore {
     this.intercityReports = Array.from(icRepMap.values());
     safeSet(STORAGE_KEYS.INTERCITY_REPORTS, this.intercityReports);
 
+    // Merge transporters
+    const cachedTransporters = safeGet<TransporterProfile[]>(STORAGE_KEYS.TRANSPORTERS, []);
+    const transMap = new Map<string, TransporterProfile>();
+    SEED_TRANSPORTERS.forEach((t) => transMap.set(t.id, t));
+    cachedTransporters.forEach((t) => {
+      const existing = transMap.get(t.id);
+      transMap.set(t.id, existing ? { ...existing, ...t } : t);
+    });
+    this.transporters = Array.from(transMap.values());
+    safeSet(STORAGE_KEYS.TRANSPORTERS, this.transporters);
+
+    // Merge social interactions
+    const cachedSocial = safeGet<CommuterSocialInteraction[]>(STORAGE_KEYS.SOCIAL_INTERACTIONS, []);
+    const socialMap = new Map<string, CommuterSocialInteraction>();
+    SEED_SOCIAL_INTERACTIONS.forEach((s) => socialMap.set(s.id, s));
+    cachedSocial.forEach((s) => {
+      const existing = socialMap.get(s.id);
+      socialMap.set(s.id, existing ? { ...existing, ...s } : s);
+    });
+    this.socialInteractions = Array.from(socialMap.values()).sort((a, b) => b.createdAt - a.createdAt);
+    safeSet(STORAGE_KEYS.SOCIAL_INTERACTIONS, this.socialInteractions);
+
     this.outbox = cachedOutbox;
   }
 
@@ -215,6 +262,33 @@ class FambaiOfflineStore {
   }
 
   public getUserProfile(): UserProfile {
+    return { ...this.userProfile };
+  }
+
+  public getUsername(): string {
+    return this.userProfile.username || 'Commuter';
+  }
+
+  public getUserHandle(): string {
+    return this.userProfile.handle || '@commuter';
+  }
+
+  public getUserBadge(): string {
+    return this.userProfile.commuterBadge || 'Daily Commuter';
+  }
+
+  public updateUserProfile(updates: Partial<UserProfile>): UserProfile {
+    let handle = updates.handle || this.userProfile.handle;
+    if (updates.username && !updates.handle) {
+      handle = '@' + updates.username.trim().toLowerCase().replace(/\s+/g, '_');
+    }
+    this.userProfile = {
+      ...this.userProfile,
+      ...updates,
+      handle,
+    };
+    safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    this.notifyChange();
     return { ...this.userProfile };
   }
 
@@ -398,6 +472,224 @@ class FambaiOfflineStore {
     this.notifyChange();
   }
 
+  // ==========================================
+  // TRANSPORTERS & OPERATORS DIRECTORY METHODS
+  // ==========================================
+  public getTransporters(city?: string, type?: string): TransporterProfile[] {
+    let list = [...this.transporters];
+    if (city && city !== 'All Cities') {
+      list = list.filter((t) => (t.city || '').toLowerCase() === city.toLowerCase());
+    }
+    if (type && type !== 'all') {
+      list = list.filter((t) => t.transportType === type);
+    }
+    return list.sort((a, b) => b.lastRouteUpdate - a.lastRouteUpdate);
+  }
+
+  public getTransporterById(id: string): TransporterProfile | undefined {
+    return this.transporters.find((t) => t.id === id);
+  }
+
+  public getTransportersForRoute(routeId: string, routeName?: string): TransporterProfile[] {
+    const rName = (routeName || '').toLowerCase();
+    return this.transporters.filter((t) => {
+      if (t.currentRouteId && t.currentRouteId === routeId) return true;
+      if (rName && t.currentRouteName && t.currentRouteName.toLowerCase().includes(rName)) return true;
+      return false;
+    });
+  }
+
+  public registerTransporter(data: {
+    operatorName: string;
+    contactPhone: string;
+    transportType: TransporterVehicleType;
+    transportTypeLabel: string;
+    currentRouteName: string;
+    currentRouteId?: string;
+    city: string;
+    vehiclePlate?: string;
+    baseTerminus?: string;
+    statusNote?: string;
+  }): TransporterProfile {
+    const newTransporter: TransporterProfile = {
+      id: 'trans-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6),
+      operatorName: data.operatorName.trim(),
+      contactPhone: data.contactPhone.trim(),
+      transportType: data.transportType,
+      transportTypeLabel: data.transportTypeLabel,
+      currentRouteName: data.currentRouteName.trim(),
+      currentRouteId: data.currentRouteId,
+      city: data.city,
+      vehiclePlate: data.vehiclePlate ? data.vehiclePlate.trim().toUpperCase() : undefined,
+      baseTerminus: data.baseTerminus ? data.baseTerminus.trim() : undefined,
+      status: 'active',
+      statusNote: data.statusNote ? data.statusNote.trim() : undefined,
+      registeredAt: Date.now(),
+      lastRouteUpdate: Date.now(),
+      registeredByDeviceId: this.deviceId,
+      username: this.getUsername(),
+      userHandle: this.getUserHandle(),
+      likes: 1,
+      userLiked: true,
+    };
+
+    this.transporters = [newTransporter, ...this.transporters];
+    safeSet(STORAGE_KEYS.TRANSPORTERS, this.transporters);
+
+    // Update user profile badge to Transporter
+    this.updateUserProfile({ role: 'transporter', commuterBadge: 'Registered Transporter' });
+
+    this.notifyChange();
+    return newTransporter;
+  }
+
+  public updateTransporterRoute(
+    transporterId: string,
+    updates: {
+      currentRouteName: string;
+      currentRouteId?: string;
+      city?: string;
+      baseTerminus?: string;
+      status?: TransporterProfile['status'];
+      statusNote?: string;
+      contactPhone?: string;
+    }
+  ): boolean {
+    const item = this.transporters.find((t) => t.id === transporterId);
+    if (!item) return false;
+
+    item.currentRouteName = updates.currentRouteName.trim();
+    if (updates.currentRouteId !== undefined) item.currentRouteId = updates.currentRouteId;
+    if (updates.city) item.city = updates.city;
+    if (updates.baseTerminus !== undefined) item.baseTerminus = updates.baseTerminus;
+    if (updates.status) item.status = updates.status;
+    if (updates.statusNote !== undefined) item.statusNote = updates.statusNote;
+    if (updates.contactPhone) item.contactPhone = updates.contactPhone.trim();
+    item.lastRouteUpdate = Date.now();
+
+    safeSet(STORAGE_KEYS.TRANSPORTERS, this.transporters);
+    this.notifyChange();
+    return true;
+  }
+
+  public toggleLikeTransporter(transporterId: string): void {
+    const item = this.transporters.find((t) => t.id === transporterId);
+    if (!item) return;
+
+    if (item.userLiked) {
+      item.likes = Math.max(0, item.likes - 1);
+      item.userLiked = false;
+    } else {
+      item.likes += 1;
+      item.userLiked = true;
+    }
+
+    safeSet(STORAGE_KEYS.TRANSPORTERS, this.transporters);
+    this.notifyChange();
+  }
+
+  // ==========================================
+  // SOCIAL INTERACTIONS & COMMUTER BUZZ METHODS
+  // ==========================================
+  public getSocialInteractions(targetType?: string, targetId?: string): CommuterSocialInteraction[] {
+    let list = [...this.socialInteractions];
+    if (targetType) {
+      list = list.filter((s) => s.targetType === targetType);
+    }
+    if (targetId) {
+      list = list.filter((s) => s.targetId === targetId);
+    }
+    return list.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  public getAllSocialInteractions(): CommuterSocialInteraction[] {
+    return [...this.socialInteractions].sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  public addSocialInteraction(data: {
+    targetType: CommuterSocialInteraction['targetType'];
+    targetId: string;
+    targetName: string;
+    comment: string;
+    rating?: number;
+    confirmedFare?: { amount: number; currency: Currency };
+    confirmedDepartureTime?: string;
+    amenitiesReview?: AmenityFeedback;
+    isAbuseReport?: boolean;
+    abuseType?: AbuseCategory;
+    abuseLocation?: string;
+    abusePlateNumber?: string;
+  }): CommuterSocialInteraction {
+    const newInteraction: CommuterSocialInteraction = {
+      id: 'soc-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6),
+      targetType: data.targetType,
+      targetId: data.targetId,
+      targetName: data.targetName,
+      username: this.getUsername(),
+      userHandle: this.getUserHandle(),
+      userBadge: this.getUserBadge(),
+      avatarBg: this.userProfile.avatarColor || '#F27D26',
+      comment: data.comment.trim(),
+      rating: data.rating,
+      likes: 1, // Author like
+      dislikes: 0,
+      userReaction: 'like',
+      createdAt: Date.now(),
+      deviceId: this.deviceId,
+      confirmedFare: data.confirmedFare,
+      confirmedDepartureTime: data.confirmedDepartureTime,
+      amenitiesReview: data.amenitiesReview,
+      isAbuseReport: data.isAbuseReport,
+      abuseType: data.abuseType,
+      abuseLocation: data.abuseLocation,
+      abusePlateNumber: data.abusePlateNumber,
+    };
+
+    this.socialInteractions = [newInteraction, ...this.socialInteractions];
+    safeSet(STORAGE_KEYS.SOCIAL_INTERACTIONS, this.socialInteractions);
+
+    // Reward commuter reputation
+    this.userProfile.reputation_score += data.isAbuseReport ? 20 : 10;
+    this.userProfile.reports_count += 1;
+    safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+
+    // If confirmed fare provided, automatically record it as a fare report too!
+    if (data.confirmedFare && data.targetType === 'route') {
+      this.reportFare(
+        data.targetId,
+        data.confirmedFare.amount,
+        data.confirmedFare.currency,
+        'Social Commuter Confirmation',
+        data.confirmedDepartureTime || 'Confirmed on route'
+      );
+    }
+
+    this.notifyChange();
+    return newInteraction;
+  }
+
+  public reactSocialInteraction(interactionId: string, reaction: 'like' | 'dislike'): void {
+    const item = this.socialInteractions.find((s) => s.id === interactionId);
+    if (!item) return;
+
+    if (item.userReaction === reaction) {
+      // Undo reaction
+      if (reaction === 'like') item.likes = Math.max(0, item.likes - 1);
+      if (reaction === 'dislike') item.dislikes = Math.max(0, item.dislikes - 1);
+      item.userReaction = undefined;
+    } else {
+      if (item.userReaction === 'like') item.likes = Math.max(0, item.likes - 1);
+      if (item.userReaction === 'dislike') item.dislikes = Math.max(0, item.dislikes - 1);
+
+      if (reaction === 'like') item.likes += 1;
+      if (reaction === 'dislike') item.dislikes += 1;
+      item.userReaction = reaction;
+    }
+
+    safeSet(STORAGE_KEYS.SOCIAL_INTERACTIONS, this.socialInteractions);
+    this.notifyChange();
+  }
+
   // Auto-expire status reports past their expires_at
   public getActiveStatusesForRoute(routeId: string): StatusReport[] {
     const now = Date.now();
@@ -422,7 +714,7 @@ class FambaiOfflineStore {
     const latestFare = fares[0];
     const latestStatus = activeStatuses[0];
 
-    // Calculate averages
+    // Calculate averages across currencies
     const usdFares = fares.filter((f) => f.currency === 'USD').slice(0, 5);
     const avgUSD = usdFares.length > 0 
       ? usdFares.reduce((sum, f) => sum + f.fare_amount, 0) / usdFares.length 
@@ -431,6 +723,16 @@ class FambaiOfflineStore {
     const zwlFares = fares.filter((f) => f.currency === 'ZWL').slice(0, 5);
     const avgZWL = zwlFares.length > 0 
       ? zwlFares.reduce((sum, f) => sum + f.fare_amount, 0) / zwlFares.length 
+      : undefined;
+
+    const zarFares = fares.filter((f) => f.currency === 'ZAR').slice(0, 5);
+    const avgZAR = zarFares.length > 0
+      ? zarFares.reduce((sum, f) => sum + f.fare_amount, 0) / zarFares.length
+      : undefined;
+
+    const bwpFares = fares.filter((f) => f.currency === 'BWP').slice(0, 5);
+    const avgBWP = bwpFares.length > 0
+      ? bwpFares.reduce((sum, f) => sum + f.fare_amount, 0) / bwpFares.length
       : undefined;
 
     // Confidence indicator: recency + upvotes
@@ -466,6 +768,8 @@ class FambaiOfflineStore {
       confidenceReason,
       averageFareUSD: avgUSD ? Number(avgUSD.toFixed(2)) : undefined,
       averageFareZWL: avgZWL ? Math.round(avgZWL) : undefined,
+      averageFareZAR: avgZAR ? Number(avgZAR.toFixed(1)) : undefined,
+      averageFareBWP: avgBWP ? Number(avgBWP.toFixed(1)) : undefined,
     };
   }
 
@@ -617,6 +921,8 @@ class FambaiOfflineStore {
       currency,
       reported_at: Date.now(),
       reporter_device_id: this.deviceId,
+      reporter_username: this.getUsername(),
+      reporter_badge: this.getUserBadge(),
       upvotes: 1, // Self confirmation
       downvotes: 0,
       userVote: 'up',
@@ -841,6 +1147,8 @@ class FambaiOfflineStore {
     localStorage.removeItem(STORAGE_KEYS.STATUS_REPORTS);
     localStorage.removeItem(STORAGE_KEYS.OUTBOX_PENDING);
     localStorage.removeItem(STORAGE_KEYS.LAST_REPORTS_BY_ROUTE);
+    localStorage.removeItem(STORAGE_KEYS.TRANSPORTERS);
+    localStorage.removeItem(STORAGE_KEYS.SOCIAL_INTERACTIONS);
     this.initFromLocalCache();
     this.notifyChange();
   }

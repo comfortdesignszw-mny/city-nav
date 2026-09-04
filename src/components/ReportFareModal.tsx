@@ -20,11 +20,13 @@ interface ReportFareModalProps {
 }
 
 const VEHICLE_OPTIONS = [
-  'Toyota HiAce Kombi (15-seater)',
+  'HiAce (Combi 15-seater)',
+  'Mushikashika (small taxis / Wish / Sienta)',
+  'Sprinters (22 Seaters)',
+  'Long Distance Coaches',
+  'Cross-boarder Quantum',
   'Minibus / Coaster (18–24 seater)',
   'ZUPCO Big Bus (65–75 seater)',
-  'Mushikashika (Wish / Sienta)',
-  'Shared Sedan / Probox',
   'Metered Taxi / Cab',
 ];
 
@@ -57,13 +59,34 @@ export const ReportFareModal: React.FC<ReportFareModalProps> = ({
   // Preset buttons for fast 2-tap reporting
   const usdPresets = ['0.50', '0.75', '1.00', '1.50', '2.00'];
   const zwlPresets = ['15', '20', '25', '30', '40'];
+  const zarPresets = ['10', '15', '20', '30', '50'];
+  const bwpPresets = ['10', '15', '20', '25', '50'];
 
   const handleCurrencyChange = (newCurr: Currency) => {
     setCurrency(newCurr);
-    if (newCurr === 'USD' && !usdPresets.includes(amount)) {
-      setAmount('0.50');
-    } else if (newCurr === 'ZWL' && !zwlPresets.includes(amount)) {
-      setAmount('20');
+    if (newCurr === 'USD') setAmount('0.50');
+    else if (newCurr === 'ZWL') setAmount('20');
+    else if (newCurr === 'ZAR') setAmount('10');
+    else if (newCurr === 'BWP') setAmount('15');
+  };
+
+  const getCurrentPresets = () => {
+    switch (currency) {
+      case 'USD': return usdPresets;
+      case 'ZWL': return zwlPresets;
+      case 'ZAR': return zarPresets;
+      case 'BWP': return bwpPresets;
+      default: return usdPresets;
+    }
+  };
+
+  const getCurrencyPrefix = () => {
+    switch (currency) {
+      case 'USD': return '$';
+      case 'ZWL': return 'ZiG';
+      case 'ZAR': return 'R';
+      case 'BWP': return 'P';
+      default: return '$';
     }
   };
 
@@ -123,33 +146,56 @@ export const ReportFareModal: React.FC<ReportFareModalProps> = ({
           </div>
         ) : (
           <div className="p-5 space-y-4">
-            {/* Currency Switcher */}
+            {/* Currency Switcher: USD, ZiG, Rand (ZAR), Pula (BWP) */}
             <div>
-              <label className="block text-xs font-black text-[#141414] uppercase tracking-wider mb-2">Select Currency</label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-black text-[#141414] uppercase tracking-wider">Select Currency</label>
+                <span className="text-[10px] font-bold text-[#F27D26]">Byo = Rands • Plumtree = Pula</span>
+              </div>
+              <div className="grid grid-cols-4 gap-1.5">
                 <button
                   type="button"
                   onClick={() => handleCurrencyChange('USD')}
-                  className={`py-2.5 px-3 text-xs font-black uppercase tracking-wider transition flex items-center justify-center gap-1.5 border-2 border-[#141414] cursor-pointer ${
+                  className={`py-2 px-1 text-xs font-black uppercase tracking-wider transition flex items-center justify-center gap-1 border-2 border-[#141414] cursor-pointer ${
                     currency === 'USD'
-                      ? 'bg-[#141414] text-white shadow-[3px_3px_0px_0px_#F27D26]'
+                      ? 'bg-[#141414] text-white shadow-[2px_2px_0px_0px_#F27D26]'
                       : 'bg-[#F5F5F0] text-[#141414] hover:bg-white'
                   }`}
                 >
-                  <DollarSign className="w-4 h-4 text-[#F27D26]" />
                   <span>USD ($)</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleCurrencyChange('ZWL')}
-                  className={`py-2.5 px-3 text-xs font-black uppercase tracking-wider transition flex items-center justify-center gap-1.5 border-2 border-[#141414] cursor-pointer ${
+                  className={`py-2 px-1 text-xs font-black uppercase tracking-wider transition flex items-center justify-center gap-1 border-2 border-[#141414] cursor-pointer ${
                     currency === 'ZWL'
-                      ? 'bg-[#141414] text-white shadow-[3px_3px_0px_0px_#F27D26]'
+                      ? 'bg-[#141414] text-white shadow-[2px_2px_0px_0px_#F27D26]'
                       : 'bg-[#F5F5F0] text-[#141414] hover:bg-white'
                   }`}
                 >
-                  <Coins className="w-4 h-4 text-[#F27D26]" />
-                  <span>ZiG / ZWL</span>
+                  <span>ZiG</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCurrencyChange('ZAR')}
+                  className={`py-2 px-1 text-xs font-black uppercase tracking-wider transition flex items-center justify-center gap-1 border-2 border-[#141414] cursor-pointer ${
+                    currency === 'ZAR'
+                      ? 'bg-[#141414] text-white shadow-[2px_2px_0px_0px_#F27D26]'
+                      : 'bg-[#F5F5F0] text-[#141414] hover:bg-white'
+                  }`}
+                >
+                  <span>Rand (R)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCurrencyChange('BWP')}
+                  className={`py-2 px-1 text-xs font-black uppercase tracking-wider transition flex items-center justify-center gap-1 border-2 border-[#141414] cursor-pointer ${
+                    currency === 'BWP'
+                      ? 'bg-[#141414] text-white shadow-[2px_2px_0px_0px_#F27D26]'
+                      : 'bg-[#F5F5F0] text-[#141414] hover:bg-white'
+                  }`}
+                >
+                  <span>Pula (P)</span>
                 </button>
               </div>
             </div>
@@ -160,21 +206,21 @@ export const ReportFareModal: React.FC<ReportFareModalProps> = ({
                 <label className="text-xs font-black text-[#141414] uppercase tracking-wider">Quick Amount Selection</label>
                 <span className="text-[10px] font-black uppercase text-stone-500">Common Fares</span>
               </div>
-              <div className="grid grid-cols-5 gap-2">
-                {(currency === 'USD' ? usdPresets : zwlPresets).map((val) => {
+              <div className="grid grid-cols-5 gap-1.5">
+                {getCurrentPresets().map((val) => {
                   const isSelected = amount === val;
                   return (
                     <button
                       key={val}
                       type="button"
                       onClick={() => setAmount(val)}
-                      className={`py-2.5 px-1 text-xs font-black uppercase border-2 border-[#141414] transition cursor-pointer ${
+                      className={`py-2 px-1 text-xs font-black uppercase border-2 border-[#141414] transition cursor-pointer ${
                         isSelected
-                          ? 'bg-[#F27D26] text-white shadow-[3px_3px_0px_0px_#141414] scale-105'
-                          : 'bg-[#F5F5F0] text-[#141414] hover:bg-white shadow-[2px_2px_0px_0px_#141414]'
+                          ? 'bg-[#F27D26] text-white shadow-[2px_2px_0px_0px_#141414] scale-105'
+                          : 'bg-[#F5F5F0] text-[#141414] hover:bg-white shadow-[1px_1px_0px_0px_#141414]'
                       }`}
                     >
-                      {currency === 'USD' ? `$${val}` : `${val}`}
+                      {getCurrencyPrefix()}{val}
                     </button>
                   );
                 })}
@@ -187,8 +233,8 @@ export const ReportFareModal: React.FC<ReportFareModalProps> = ({
                 Or enter custom fare
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#141414] font-black text-base">
-                  {currency === 'USD' ? '$' : 'ZiG'}
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#141414] font-black text-sm uppercase">
+                  {getCurrencyPrefix()}
                 </div>
                 <input
                   type="number"
@@ -196,7 +242,7 @@ export const ReportFareModal: React.FC<ReportFareModalProps> = ({
                   min="0.1"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
-                  className="w-full pl-14 pr-4 py-2.5 bg-[#F5F5F0] text-[#141414] font-black text-lg border-2 border-[#141414] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#F27D26]"
+                  className="w-full pl-12 pr-4 py-2.5 bg-[#F5F5F0] text-[#141414] font-black text-base border-2 border-[#141414] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#F27D26]"
                 />
               </div>
             </div>
@@ -251,11 +297,11 @@ export const ReportFareModal: React.FC<ReportFareModalProps> = ({
               >
                 <span>Confirm &amp; Submit Fare</span>
                 <span className="bg-[#F27D26] text-white px-2.5 py-0.5 border border-white text-xs font-black">
-                  {currency === 'USD' ? `$${amount}` : `ZiG ${amount}`}
+                  {getCurrencyPrefix()} {amount}
                 </span>
               </button>
               <p className="text-center text-[10px] font-bold text-stone-500 mt-2 uppercase tracking-wider">
-                ⚡ Optimistic update: saved to local cache &amp; queued via Outbox
+                ⚡ Stored in local cache &amp; synced via Outbox
               </p>
             </div>
           </div>
