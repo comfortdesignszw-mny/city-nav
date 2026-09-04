@@ -1,0 +1,6 @@
+{
+  "name": "Fambai/Hambani Travel",
+  "description": "Offline-first Zimbabwe travel navigator and crowdsourced knowledgebase for kombi and intercity bus fares, operators (CAG, City Link, Inter Africa), and road status.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
