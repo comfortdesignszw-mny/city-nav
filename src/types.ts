@@ -33,8 +33,10 @@ export interface RouteItem {
 export type TransporterVehicleType = 
   | 'hiace_combi' // HiAce (Combi)
   | 'mushikashika' // Mushikashika (small taxis / Wish / Sienta)
+  | 'sprinter' // Sprinters (22 Seaters)
   | 'sprinter_22' // Sprinters (22 Seaters)
   | 'intercity_coach' // Long Distance Coaches
+  | 'long_distance_coach' // Long Distance Coaches
   | 'cross_border_quantum' // Cross-boarder Quantum
   | 'metered_taxi'; // Metered City Taxi / Cab
 
@@ -66,7 +68,10 @@ export type AbuseCategory =
   | 'tout_harassment' 
   | 'overloading' 
   | 'refusing_currency' 
-  | 'off_route';
+  | 'off_route'
+  | 'off_route_drop'
+  | 'breakdown_no_refund'
+  | 'poor_cleanliness';
 
 export interface AmenityFeedback {
   ac?: boolean; // Air conditioning
@@ -77,6 +82,10 @@ export interface AmenityFeedback {
   toilet?: boolean; // On-board restroom
   refreshments?: boolean; // Water / Refreshments
   tv?: boolean; // Entertainment screen
+  acWorking?: boolean;
+  usbCharging?: boolean;
+  wifiWorking?: boolean;
+  luggageSecurity?: boolean;
 }
 
 export interface CommuterSocialInteraction {
@@ -171,6 +180,7 @@ export interface Rank {
 
 export interface UserProfile {
   device_id: string;
+  name?: string; // e.g. "Farai Moyo"
   username: string; // e.g. "Tinashe_Zw"
   handle: string; // e.g. "@tinashe_zw"
   avatarColor: string; // Hex color for avatar

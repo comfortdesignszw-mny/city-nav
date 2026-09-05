@@ -75,6 +75,7 @@ export default function App() {
           <HomeRouteSearch 
             onSelectRoute={handleSelectRoute}
             onSelectRank={handleSelectRank}
+            onNavigateToBuzz={() => setActiveTab('buzz')}
           />
         )}
 

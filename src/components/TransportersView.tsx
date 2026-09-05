@@ -6,6 +6,7 @@ import {
   Phone, 
   MessageCircle, 
   PlusCircle, 
+  Plus,
   Edit3, 
   CheckCircle2, 
   MapPin, 
@@ -26,6 +27,8 @@ const VEHICLE_TYPE_CONFIG: Record<TransporterVehicleType, { label: string; icon:
   hiace_combi: { label: 'HiAce (Combi)', icon: Car, color: 'bg-amber-100 text-amber-900 border-amber-300' },
   mushikashika: { label: 'Mushikashika (Small Taxi)', icon: Car, color: 'bg-orange-100 text-orange-900 border-orange-300' },
   sprinter: { label: 'Sprinter (22 Seater)', icon: Bus, color: 'bg-blue-100 text-blue-900 border-blue-300' },
+  sprinter_22: { label: 'Sprinter (22 Seater)', icon: Bus, color: 'bg-blue-100 text-blue-900 border-blue-300' },
+  intercity_coach: { label: 'Long Distance Coach', icon: Bus, color: 'bg-emerald-100 text-emerald-900 border-emerald-300' },
   long_distance_coach: { label: 'Long Distance Coach', icon: Bus, color: 'bg-emerald-100 text-emerald-900 border-emerald-300' },
   cross_border_quantum: { label: 'Cross-Border Quantum', icon: Truck, color: 'bg-purple-100 text-purple-900 border-purple-300' },
   metered_taxi: { label: 'Metered Taxi / Cab', icon: Car, color: 'bg-yellow-100 text-yellow-900 border-yellow-300' },
@@ -194,18 +197,40 @@ export const TransportersView: React.FC = () => {
       {/* Transporters List */}
       <div className="space-y-3">
         {filteredTransporters.length === 0 ? (
-          <div className="p-8 text-center bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414]">
-            <Truck className="w-12 h-12 text-stone-400 mx-auto mb-2" />
-            <h3 className="text-base font-black text-[#141414] uppercase">No Transporters Found</h3>
-            <p className="text-xs font-bold text-stone-500 mt-1 max-w-sm mx-auto">
-              No registered transport providers match your current city or vehicle type filter.
-            </p>
-            <button
-              onClick={() => { setSelectedCity('All Cities'); setSelectedType('all'); setSearchQuery(''); }}
-              className="mt-4 px-4 py-2 bg-[#141414] text-white border-2 border-[#141414] font-black text-xs uppercase cursor-pointer"
-            >
-              Reset Filters
-            </button>
+          <div className="p-8 sm:p-10 text-center bg-white border-2 border-[#141414] shadow-[6px_6px_0px_0px_#141414] space-y-4">
+            <div className="w-16 h-16 bg-[#F5F5F0] border-2 border-[#141414] shadow-[3px_3px_0px_0px_#F27D26] flex items-center justify-center mx-auto text-[#141414]">
+              <Truck className="w-8 h-8 text-[#F27D26]" />
+            </div>
+            <div className="space-y-1.5 max-w-md mx-auto">
+              <span className="text-[10px] font-black uppercase tracking-widest text-[#F27D26] block">
+                Official Directory Ready
+              </span>
+              <h3 className="text-lg sm:text-xl font-black text-[#141414] uppercase tracking-tight">
+                {transporters.length === 0 ? 'No Transporters Registered Yet' : 'No Transporters Match Filters'}
+              </h3>
+              <p className="text-xs sm:text-sm font-medium text-stone-600 leading-relaxed">
+                {transporters.length === 0
+                  ? 'Nothing is created yet! The transport directory is clean and open for production. Are you a kombi driver, conductor, fleet owner, or cross-border transporter? Register your vehicle to connect with commuters directly on WhatsApp and phone.'
+                  : 'No registered transport providers match your search, city, or vehicle type filter. Reset your filters to see all available listings.'}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+              <button
+                onClick={() => setIsRegisterOpen(true)}
+                className="py-3 px-6 bg-[#141414] hover:bg-[#F27D26] text-white font-black text-xs sm:text-sm uppercase tracking-wider border-2 border-[#141414] shadow-[4px_4px_0px_0px_#F27D26] transition cursor-pointer flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ Register Your Vehicle / Fleet</span>
+              </button>
+              {transporters.length > 0 && (
+                <button
+                  onClick={() => { setSelectedCity('All Cities'); setSelectedType('all'); setSearchQuery(''); }}
+                  className="py-3 px-4 bg-[#F5F5F0] hover:bg-stone-200 text-[#141414] font-black text-xs sm:text-sm uppercase tracking-wider border-2 border-[#141414] transition cursor-pointer"
+                >
+                  Reset Filters ({transporters.length})
+                </button>
+              )}
+            </div>
           </div>
         ) : (
           filteredTransporters.map((t) => {
@@ -390,6 +415,8 @@ const RegisterTransporterModal: React.FC<RegisterTransporterModalProps> = ({
       hiace_combi: 'HiAce (Combi)',
       mushikashika: 'Mushikashika (Small Taxi)',
       sprinter: 'Sprinter (22 Seater)',
+      sprinter_22: 'Sprinter (22 Seater)',
+      intercity_coach: 'Long Distance Coach',
       long_distance_coach: 'Long Distance Coach',
       cross_border_quantum: 'Cross-Border Quantum',
       metered_taxi: 'Metered Taxi / Cab',

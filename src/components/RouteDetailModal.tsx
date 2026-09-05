@@ -13,6 +13,7 @@ import {
   DollarSign, 
   Coins, 
   PlusCircle, 
+  Plus,
   Radio, 
   Share2, 
   ArrowRight,
@@ -155,7 +156,18 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
                       </div>
                     </div>
                   ) : (
-                    <p className="text-sm font-black uppercase text-stone-500 mt-1">No fare reported yet today</p>
+                    <div className="mt-2 space-y-2">
+                      <p className="text-xs sm:text-sm font-bold text-stone-600">
+                        Nothing has been recorded yet for this route today. Be the first commuter to report what kombis or buses are charging!
+                      </p>
+                      <button
+                        onClick={() => setIsReportFareOpen(true)}
+                        className="py-1.5 px-3 bg-[#141414] hover:bg-[#F27D26] text-white text-xs font-black uppercase tracking-wider border border-[#141414] transition cursor-pointer inline-flex items-center gap-1.5 shadow-[2px_2px_0px_0px_#F27D26]"
+                      >
+                        <PlusCircle className="w-3.5 h-3.5" />
+                        <span>+ Report Today's Fare</span>
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -226,12 +238,21 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
               </div>
 
               {activeStatuses.length === 0 ? (
-                <div className="p-4 bg-[#F5F5F0] border-2 border-[#141414] text-center">
-                  <CheckCircle2 className="w-6 h-6 text-[#141414] mx-auto mb-1" />
-                  <p className="text-xs font-black uppercase text-[#141414]">No active incidents or roadblocks</p>
-                  <p className="text-[11px] font-medium text-stone-600 mt-0.5">
-                    Traffic appears normal. If you are currently commuting on this route, report an update.
-                  </p>
+                <div className="p-4 bg-[#F5F5F0] border-2 border-[#141414] text-center space-y-2">
+                  <CheckCircle2 className="w-6 h-6 text-emerald-600 mx-auto" />
+                  <div>
+                    <p className="text-xs font-black uppercase text-[#141414]">No Active Incidents or Roadblocks</p>
+                    <p className="text-[11px] font-medium text-stone-600 mt-0.5 max-w-xs mx-auto">
+                      Nothing has been reported yet on this corridor. If you encounter a police blitz, delay, or route diversion, let fellow commuters know!
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setIsReportStatusOpen(true)}
+                    className="py-1.5 px-3 bg-[#141414] hover:bg-[#F27D26] text-white text-xs font-black uppercase tracking-wider border border-[#141414] transition cursor-pointer inline-flex items-center gap-1.5 shadow-[2px_2px_0px_0px_#F27D26]"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Report Status or Alert</span>
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-2.5">

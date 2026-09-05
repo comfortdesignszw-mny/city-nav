@@ -26,7 +26,7 @@ import { Currency, AbuseCategory, AmenityFeedback } from '../types';
 interface AddReviewAbuseModalProps {
   isOpen: boolean;
   onClose: () => void;
-  targetType: 'route' | 'intercity' | 'operator' | 'transporter';
+  targetType: 'route' | 'intercity' | 'operator' | 'transporter' | 'rank';
   targetId: string;
   targetName: string;
   isIntercity?: boolean;

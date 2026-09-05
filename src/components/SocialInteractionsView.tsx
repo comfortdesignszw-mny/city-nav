@@ -10,6 +10,7 @@ import {
   MapPin, 
   User, 
   PlusCircle, 
+  Plus,
   Sparkles, 
   Wifi, 
   Wind, 
@@ -164,18 +165,43 @@ export const SocialInteractionsView: React.FC = () => {
       {/* Social Feed List */}
       <div className="space-y-3">
         {filteredInteractions.length === 0 ? (
-          <div className="p-8 text-center bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414]">
-            <MessageSquare className="w-12 h-12 text-stone-400 mx-auto mb-2" />
-            <h3 className="text-base font-black text-[#141414] uppercase">No Entries in this Category</h3>
-            <p className="text-xs font-bold text-stone-500 mt-1 max-w-sm mx-auto">
-              Be the first commuter to rate a coach, confirm a fare, or share an update!
-            </p>
-            <button
-              onClick={() => setIsAddModalOpen(true)}
-              className="mt-4 px-4 py-2 bg-[#141414] text-white border-2 border-[#141414] font-black text-xs uppercase cursor-pointer"
-            >
-              Post First Review
-            </button>
+          <div className="p-8 sm:p-10 text-center bg-white border-2 border-[#141414] shadow-[6px_6px_0px_0px_#141414] space-y-4">
+            <div className="w-16 h-16 bg-[#F5F5F0] border-2 border-[#141414] shadow-[3px_3px_0px_0px_#F27D26] flex items-center justify-center mx-auto text-[#141414]">
+              <MessageSquare className="w-8 h-8 text-[#F27D26]" />
+            </div>
+            
+            <div className="space-y-1.5 max-w-md mx-auto">
+              <span className="text-[10px] font-black text-[#F27D26] uppercase tracking-widest block">
+                Fresh Board Ready for Community
+              </span>
+              <h3 className="text-lg sm:text-xl font-black text-[#141414] uppercase tracking-tight">
+                {interactions.length === 0 ? 'No Commuter Buzz or Reviews Yet' : 'No Posts in this Category'}
+              </h3>
+              <p className="text-xs sm:text-sm font-medium text-stone-600 leading-relaxed">
+                {interactions.length === 0 
+                  ? 'Nothing has been created yet! This board is clean for production. Share your latest bus or kombi trip, confirm a fare, ask a route question, or report road updates to help fellow travellers.' 
+                  : 'Nothing has been posted under this filter yet. Be the first to share an update here or reset your filter to view all discussions.'}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+              <button
+                onClick={() => setIsAddModalOpen(true)}
+                className="py-3 px-6 bg-[#141414] text-white hover:bg-[#F27D26] transition font-black text-xs sm:text-sm uppercase tracking-wider border-2 border-[#141414] shadow-[4px_4px_0px_0px_#F27D26] flex items-center gap-2 cursor-pointer active:translate-x-[1px] active:translate-y-[1px]"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ Post to Commuter Buzz</span>
+              </button>
+
+              {activeFilter !== 'all' && (
+                <button
+                  onClick={() => setActiveFilter('all')}
+                  className="py-3 px-4 bg-[#F5F5F0] text-[#141414] hover:bg-stone-200 transition font-black text-xs sm:text-sm uppercase tracking-wider border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] cursor-pointer"
+                >
+                  Show All Categories ({interactions.length})
+                </button>
+              )}
+            </div>
           </div>
         ) : (
           filteredInteractions.map((item) => {

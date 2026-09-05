@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
 import { UserProfileModal } from './UserProfileModal';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export type NavTab = 'routes' | 'intercity' | 'transporters' | 'buzz' | 'ranks' | 'my-reports';
 
@@ -57,11 +58,16 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
 
         {/* User Profile Pill & Connectivity */}
         <div className="flex items-center gap-2">
-          {/* Commuter Profile Pill */}
+          {/* Lightweight Native PWA Install Button */}
+          <PWAInstallButton variant="compact" />
+
+          {/* Commuter Profile Pill (Directly opens merged Profile & Reports) */}
           <button
-            onClick={() => setIsProfileModalOpen(true)}
-            className="flex items-center gap-1.5 bg-white border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] px-2.5 py-1 text-xs font-black uppercase hover:bg-[#F27D26] hover:text-white transition cursor-pointer"
-            title="Edit commuter handle & badge"
+            onClick={() => setActiveTab('my-reports')}
+            className={`flex items-center gap-1.5 border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] px-2.5 py-1 text-xs font-black uppercase transition cursor-pointer ${
+              activeTab === 'my-reports' ? 'bg-[#141414] text-white' : 'bg-white hover:bg-[#F27D26] hover:text-white'
+            }`}
+            title="Open Profile & My Reports"
           >
             <div 
               className="w-4 h-4 text-[9px] font-black text-white flex items-center justify-center border border-[#141414]"
@@ -69,7 +75,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
             >
               {profile.username ? profile.username.charAt(0).toUpperCase() : 'U'}
             </div>
-            <span className="hidden xs:inline">{profile.userHandle || '@commuter'}</span>
+            <span className="hidden xs:inline">{profile.name || profile.handle || '@commuter'}</span>
           </button>
 
           {/* Outbox Badge */}
@@ -226,14 +232,14 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
 
         <button
           onClick={() => setActiveTab('my-reports')}
-          className={`flex-1 min-w-[95px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition cursor-pointer ${
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition cursor-pointer ${
             activeTab === 'my-reports'
               ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
               : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'
           }`}
         >
           <UserCheck className="w-3.5 h-3.5 flex-shrink-0" />
-          <span className="truncate">My Reports</span>
+          <span className="truncate">Profile &amp; Reports</span>
           {pendingCount > 0 && (
             <span className="w-2 h-2 rounded-full bg-[#F27D26] border border-[#141414] animate-pulse ml-0.5 flex-shrink-0" />
           )}

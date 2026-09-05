@@ -52,6 +52,7 @@ const STORAGE_KEYS = {
   INTERCITY_REPORTS: 'fambai_intercity_reports',
   TRANSPORTERS: 'fambai_transporters',
   SOCIAL_INTERACTIONS: 'fambai_social_interactions',
+  PRODUCTION_CLEAN: 'fambai_production_clean_v1',
 };
 
 // Generate UUID for anonymous device identification
@@ -110,6 +111,19 @@ class FambaiOfflineStore {
   constructor() {
     this.deviceId = getOrCreateDeviceId();
     this.simulatedOffline = safeGet<boolean>(STORAGE_KEYS.OFFLINE_SIMULATION, false);
+
+    // Production Reset Check: Ensure stale demo data is flushed for production while preserving profile
+    const hasCleanedForProduction = safeGet<boolean>(STORAGE_KEYS.PRODUCTION_CLEAN, false);
+    if (!hasCleanedForProduction) {
+      localStorage.removeItem(STORAGE_KEYS.SOCIAL_INTERACTIONS);
+      localStorage.removeItem(STORAGE_KEYS.FARE_REPORTS);
+      localStorage.removeItem(STORAGE_KEYS.STATUS_REPORTS);
+      localStorage.removeItem(STORAGE_KEYS.INTERCITY_REPORTS);
+      localStorage.removeItem(STORAGE_KEYS.TRANSPORTERS);
+      localStorage.removeItem(STORAGE_KEYS.OUTBOX_PENDING);
+      localStorage.removeItem(STORAGE_KEYS.LAST_REPORTS_BY_ROUTE);
+      safeSet(STORAGE_KEYS.PRODUCTION_CLEAN, true);
+    }
     
     // User Location hydration (defaults to Copacabana, Harare if not set)
     const cachedLoc = safeGet<UserLocation | null>(STORAGE_KEYS.USER_LOCATION, null);
@@ -1139,12 +1153,13 @@ class FambaiOfflineStore {
     return { fares: myFares, statuses: myStatuses };
   }
 
-  // Reset demo data to seed (useful for testing)
+  // Reset data to clean production state
   public resetToSeed(): void {
     localStorage.removeItem(STORAGE_KEYS.ROUTES);
     localStorage.removeItem(STORAGE_KEYS.RANKS);
     localStorage.removeItem(STORAGE_KEYS.FARE_REPORTS);
     localStorage.removeItem(STORAGE_KEYS.STATUS_REPORTS);
+    localStorage.removeItem(STORAGE_KEYS.INTERCITY_REPORTS);
     localStorage.removeItem(STORAGE_KEYS.OUTBOX_PENDING);
     localStorage.removeItem(STORAGE_KEYS.LAST_REPORTS_BY_ROUTE);
     localStorage.removeItem(STORAGE_KEYS.TRANSPORTERS);

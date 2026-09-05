@@ -47,6 +47,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const store = useOfflineStore();
   const profile = store.getUserProfile();
 
+  const [name, setName] = useState(profile.name || '');
   const [username, setUsername] = useState(profile.username || '');
   const [handle, setHandle] = useState(profile.handle || '');
   const [avatarColor, setAvatarColor] = useState(profile.avatarColor || '#F27D26');
@@ -67,6 +68,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
     if (!username.trim()) return;
 
     store.updateUserProfile({
+      name: name.trim() || undefined,
       username: username.trim(),
       handle: handle.startsWith('@') ? handle : `@${handle}`,
       avatarColor,
@@ -149,11 +151,27 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               </div>
             </div>
 
-            {/* Username Field */}
+            {/* Full Name Field */}
             <div>
               <label className="block text-xs font-black text-[#141414] uppercase tracking-wider mb-1 flex items-center gap-1.5">
                 <User className="w-3.5 h-3.5 text-[#F27D26]" />
-                Choose Your Commuter Username
+                Full Name (Optional)
+              </label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Farai Moyo"
+                maxLength={40}
+                className="w-full bg-white border-2 border-[#141414] p-2.5 text-sm font-black text-[#141414] focus:outline-none focus:ring-2 focus:ring-[#F27D26]"
+              />
+            </div>
+
+            {/* Username Field */}
+            <div>
+              <label className="block text-xs font-black text-[#141414] uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                <AtSign className="w-3.5 h-3.5 text-[#F27D26]" />
+                Choose Your Commuter Username *
               </label>
               <input
                 type="text"

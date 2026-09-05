@@ -18,12 +18,14 @@ import {
   ExternalLink,
   Crosshair,
   Search,
+  Plus,
   Share2
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
 import { Rank, RouteItem, UserLocation } from '../types';
 import { formatCurrency, getStatusConfig } from '../utils/formatters';
 import { UserLocationBar } from './UserLocationBar';
+import { AddRouteFareModal } from './AddRouteFareModal';
 import { 
   calculateDistanceKm, 
   calculateBearing, 
@@ -74,6 +76,7 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
   const [rankTypeFilter, setRankTypeFilter] = useState<RankTypeFilter>('all');
   const [searchFilter, setSearchFilter] = useState<string>('');
   const [copiedCoords, setCopiedCoords] = useState(false);
+  const [isAddRouteOpen, setIsAddRouteOpen] = useState(false);
 
   // Compute ranks sorted by proximity to the user's current GPS location
   const ranksWithProximity = useMemo(() => {
@@ -471,7 +474,26 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
 
         {/* Ranks Proximity List */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-          {filteredRanks.map((rn) => {
+          {filteredRanks.length === 0 ? (
+            <div className="col-span-full bg-[#F5F5F0] border-2 border-[#141414] p-8 sm:p-10 text-center space-y-3 shadow-[2px_2px_0px_0px_#141414]">
+              <div className="w-14 h-14 bg-white border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] flex items-center justify-center mx-auto text-[#141414]">
+                <MapPin className="w-7 h-7 text-[#F27D26]" />
+              </div>
+              <div className="space-y-1 max-w-sm mx-auto">
+                <h4 className="text-base sm:text-lg font-black text-[#141414] uppercase">No Bus Ranks Match Filters</h4>
+                <p className="text-xs sm:text-sm font-medium text-stone-600">
+                  Nothing matches your search filter. All major Zimbabwean hubs like Copacabana, Fourth Street, Market Square, and Renkini are ready to explore.
+                </p>
+              </div>
+              <button
+                onClick={() => { setSelectedCity('All Cities'); setRankTypeFilter('all'); setSearchFilter(''); }}
+                className="py-2.5 px-5 bg-[#141414] hover:bg-[#F27D26] text-white font-black text-xs uppercase tracking-wider border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] transition cursor-pointer"
+              >
+                Show All Termini &amp; Ranks ({ranksWithProximity.length})
+              </button>
+            </div>
+          ) : (
+          filteredRanks.map((rn) => {
             const isSelected = activeRank && rn.id === activeRank.id;
             const distStr = formatDistance(rn.distanceKm);
             const walkStr = formatWalkingEta(rn.distanceKm);
@@ -532,7 +554,8 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
                 </div>
               </div>
             );
-          })}
+          })
+          )}
         </div>
       </div>
 
@@ -554,8 +577,17 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
           </div>
 
           {servedRoutes.length === 0 ? (
-            <div className="p-6 bg-[#F5F5F0] border-2 border-[#141414] text-center text-xs font-bold text-stone-500">
-              No routes recorded departing directly from this specific bay.
+            <div className="p-6 bg-[#F5F5F0] border-2 border-[#141414] text-center space-y-2">
+              <p className="text-xs sm:text-sm font-bold text-stone-700">
+                No routes recorded departing directly from this specific bay yet.
+              </p>
+              <button
+                onClick={() => setIsAddRouteOpen(true)}
+                className="py-2 px-4 bg-[#141414] hover:bg-[#F27D26] text-white font-black text-xs uppercase tracking-wider border border-[#141414] transition cursor-pointer shadow-[2px_2px_0px_0px_#F27D26] inline-flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Add Route from {activeRank.name}</span>
+              </button>
             </div>
           ) : (
             <div className="space-y-2">
@@ -612,6 +644,19 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* Add Route & Fare Modal */}
+      {isAddRouteOpen && activeRank && (
+        <AddRouteFareModal
+          isOpen={isAddRouteOpen}
+          onClose={() => setIsAddRouteOpen(false)}
+          initialCity={activeRank.city}
+          onRouteAdded={(routeId) => {
+            setIsAddRouteOpen(false);
+            onSelectRoute(routeId);
+          }}
+        />
       )}
     </div>
   );

@@ -19,17 +19,20 @@ import {
   ArrowRightLeft,
   PlusCircle,
   TrendingUp,
+  Banknote,
   ThumbsUp,
   ThumbsDown,
   Sparkles,
   RefreshCw,
-  ExternalLink
+  ExternalLink,
+  Share2
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
-import { RouteCategory } from '../types';
+import { RouteCategory, FareReport } from '../types';
 import { formatTimeAgo, formatCurrency, getStatusConfig } from '../utils/formatters';
 import { UserLocationBar } from './UserLocationBar';
 import { AddRouteFareModal } from './AddRouteFareModal';
+import { ShareFareModal } from './ShareFareModal';
 import { 
   calculateDistanceKm, 
   formatDistance, 
@@ -41,6 +44,7 @@ import {
 interface HomeRouteSearchProps {
   onSelectRoute: (routeId: string) => void;
   onSelectRank: (rankId: string) => void;
+  onNavigateToBuzz?: () => void;
 }
 
 const PRIMARY_CITIES = [
@@ -65,7 +69,8 @@ const PRIMARY_CITIES = [
 
 export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({ 
   onSelectRoute, 
-  onSelectRank 
+  onSelectRank,
+  onNavigateToBuzz
 }) => {
   const store = useOfflineStore();
   const routes = store.getRoutes();
@@ -76,6 +81,14 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [isBrowseMode, setIsBrowseMode] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [shareModalState, setShareModalState] = useState<{
+    isOpen: boolean;
+    mode: 'single' | 'all';
+    fare?: FareReport;
+  }>({
+    isOpen: false,
+    mode: 'single',
+  });
 
   // Filters for Search / Browse Mode
   const [selectedCity, setSelectedCity] = useState<string>('All Cities');
@@ -265,19 +278,57 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
                   Latest Live Fares &amp; Active Departures
                 </h2>
               </div>
-              <button
-                onClick={() => setIsBrowseMode(true)}
-                className="text-[10px] font-black uppercase tracking-wider text-[#141414] hover:text-[#F27D26] flex items-center gap-1 cursor-pointer"
-              >
-                <span>Search All</span>
-                <ArrowRight className="w-3 h-3" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShareModalState({
+                    isOpen: true,
+                    mode: 'all',
+                  })}
+                  className="text-[10px] font-black uppercase tracking-wider bg-white hover:bg-[#141414] hover:text-white text-[#141414] border-2 border-[#141414] px-2 py-1 flex items-center gap-1 cursor-pointer transition shadow-[1px_1px_0px_0px_#141414]"
+                  title="Share full live fares digest externally (WhatsApp/Social) or post to Commuter Buzz"
+                >
+                  <Share2 className="w-3 h-3 text-[#F27D26]" />
+                  <span>Share All Fares</span>
+                </button>
+                <button
+                  onClick={() => setIsBrowseMode(true)}
+                  className="text-[10px] font-black uppercase tracking-wider text-[#141414] hover:text-[#F27D26] flex items-center gap-1 cursor-pointer"
+                >
+                  <span>Search All</span>
+                  <ArrowRight className="w-3 h-3" />
+                </button>
+              </div>
             </div>
 
             <div className="space-y-2.5">
               {latestFares.length === 0 ? (
-                <div className="p-4 text-center text-xs font-bold text-stone-500 bg-[#F5F5F0]">
-                  No fares recorded yet. Be the first to add one!
+                <div className="p-6 sm:p-8 text-center bg-[#F5F5F0] border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414] space-y-3">
+                  <div className="w-12 h-12 bg-white border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] flex items-center justify-center mx-auto text-[#141414]">
+                    <Banknote className="w-6 h-6 text-[#F27D26]" />
+                  </div>
+                  <div className="space-y-1 max-w-sm mx-auto">
+                    <h3 className="text-base font-black text-[#141414] uppercase tracking-tight">
+                      No Live Fares Reported Yet Today
+                    </h3>
+                    <p className="text-xs font-medium text-stone-600 leading-relaxed">
+                      Nothing has been recorded yet for today! When passengers board kombis or buses, they post fares to keep everyone updated in USD, ZiG, and Rand.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                    <button
+                      onClick={() => setIsAddModalOpen(true)}
+                      className="py-2.5 px-4 bg-[#141414] text-white hover:bg-[#F27D26] transition font-black text-xs uppercase tracking-wider border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <PlusCircle className="w-4 h-4" />
+                      <span>+ Report Today's Fare</span>
+                    </button>
+                    <button
+                      onClick={() => setIsBrowseMode(true)}
+                      className="py-2.5 px-3 bg-white text-[#141414] hover:bg-stone-200 transition font-black text-xs uppercase tracking-wider border-2 border-[#141414] cursor-pointer"
+                    >
+                      Browse All Corridors
+                    </button>
+                  </div>
                 </div>
               ) : (
                 latestFares.map((fare) => (
@@ -321,6 +372,21 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
                       </div>
 
                       <div className="flex items-center gap-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShareModalState({
+                              isOpen: true,
+                              mode: 'single',
+                              fare,
+                            });
+                          }}
+                          className="px-2 py-1 text-[10px] font-black border border-[#141414] bg-white hover:bg-[#F27D26] hover:text-white text-[#141414] flex items-center gap-1 transition cursor-pointer"
+                          title="Share this fare card externally or post to Commuter Buzz"
+                        >
+                          <Share2 className="w-2.5 h-2.5" />
+                          <span>Share</span>
+                        </button>
                         <button
                           onClick={() => handleVoteFare(fare.id, 'up')}
                           className={`px-2 py-1 text-[10px] font-black border border-[#141414] flex items-center gap-1 transition cursor-pointer ${
@@ -424,9 +490,24 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
 
             <div className="space-y-2">
               {latestAlerts.length === 0 ? (
-                <div className="p-3 bg-emerald-50 border border-emerald-300 text-xs font-bold text-emerald-900 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>All major routes operating smoothly. No active roadblocks reported.</span>
+                <div className="p-4 bg-emerald-50 border-2 border-emerald-600 shadow-[2px_2px_0px_0px_#047857] flex flex-col sm:flex-row items-center justify-between gap-3 text-[#141414]">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 bg-emerald-600 text-white flex items-center justify-center flex-shrink-0 border border-[#141414]">
+                      <CheckCircle2 className="w-5 h-5 text-white stroke-[2.5]" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black uppercase text-emerald-950">No Roadblocks or Queue Delays Reported Yet</div>
+                      <div className="text-[11px] font-medium text-emerald-800">
+                        Nothing has been reported yet. Commuter corridors are clear! Encountering a blitz or slow rank?
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setIsAddModalOpen(true)}
+                    className="py-2 px-3 bg-[#141414] hover:bg-[#F27D26] text-white border-2 border-[#141414] text-xs font-black uppercase tracking-wider transition cursor-pointer shadow-[2px_2px_0px_0px_#F27D26] whitespace-nowrap self-stretch sm:self-auto text-center"
+                  >
+                    + Report Road Alert
+                  </button>
                 </div>
               ) : (
                 latestAlerts.map((alert) => {
@@ -577,20 +658,32 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
           {/* Filtered Route Cards List */}
           <div className="space-y-2.5">
             {filteredSummaries.length === 0 ? (
-              <div className="bg-white border-2 border-[#141414] p-8 text-center space-y-3">
-                <Search className="w-8 h-8 text-stone-400 mx-auto" />
-                <h3 className="text-base font-black uppercase text-[#141414]">
-                  No routes match your search
-                </h3>
-                <p className="text-xs font-medium text-stone-600">
-                  Try another keyword or add this route to the crowdsourced database.
-                </p>
-                <button
-                  onClick={() => setIsAddModalOpen(true)}
-                  className="px-4 py-2 bg-[#141414] text-white text-xs font-black uppercase tracking-wider border-2 border-[#141414] hover:bg-[#F27D26] transition cursor-pointer"
-                >
-                  + Add This Route Now
-                </button>
+              <div className="bg-white border-2 border-[#141414] p-8 text-center space-y-4 shadow-[4px_4px_0px_0px_#141414]">
+                <div className="w-14 h-14 bg-[#F5F5F0] border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] flex items-center justify-center mx-auto text-[#141414]">
+                  <Search className="w-7 h-7 text-[#F27D26]" />
+                </div>
+                <div className="space-y-1 max-w-md mx-auto">
+                  <h3 className="text-base sm:text-lg font-black uppercase text-[#141414]">
+                    No Routes Found Matching Your Search
+                  </h3>
+                  <p className="text-xs sm:text-sm font-medium text-stone-600">
+                    Nothing is created under this route name or terminus yet. You can be the first to add it with its origin, destination, and fare!
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                  <button
+                    onClick={() => setIsAddModalOpen(true)}
+                    className="py-2.5 px-5 bg-[#141414] text-white text-xs sm:text-sm font-black uppercase tracking-wider border-2 border-[#141414] hover:bg-[#F27D26] transition cursor-pointer shadow-[3px_3px_0px_0px_#F27D26]"
+                  >
+                    + Add This Route &amp; Fare
+                  </button>
+                  <button
+                    onClick={() => { setSearchQuery(''); setSelectedCategory('all'); setSelectedCity('All Cities'); }}
+                    className="py-2.5 px-4 bg-[#F5F5F0] text-[#141414] text-xs sm:text-sm font-black uppercase tracking-wider border-2 border-[#141414] hover:bg-stone-200 transition cursor-pointer"
+                  >
+                    Clear Search
+                  </button>
+                </div>
               </div>
             ) : (
               filteredSummaries.map((summary) => {
@@ -666,6 +759,17 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
         onClose={() => setIsAddModalOpen(false)}
         onRouteAdded={(routeId) => onSelectRoute(routeId)}
         initialCity={selectedCity}
+      />
+
+      {/* 5. Share Fare & Departures Modal */}
+      <ShareFareModal
+        isOpen={shareModalState.isOpen}
+        onClose={() => setShareModalState({ isOpen: false, mode: 'single' })}
+        mode={shareModalState.mode}
+        fare={shareModalState.fare}
+        allFares={latestFares}
+        allAlerts={latestAlerts}
+        onNavigateToBuzz={onNavigateToBuzz}
       />
     </div>
   );

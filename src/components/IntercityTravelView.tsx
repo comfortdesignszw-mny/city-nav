@@ -10,6 +10,7 @@ import {
   ArrowRight, 
   Star, 
   PlusCircle, 
+  Plus,
   ShieldCheck, 
   Luggage, 
   Phone, 
@@ -54,13 +55,13 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
 
   // Social review & abuse modal state
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
-  const [reviewTarget, setReviewTarget] = useState<{ type: 'intercity' | 'operator'; id: string; name: string }>({
+  const [reviewTarget, setReviewTarget] = useState<{ type: 'intercity' | 'operator' | 'route' | 'transporter' | 'rank'; id: string; name: string }>({
     type: 'intercity',
     id: '',
     name: ''
   });
 
-  const handleOpenReviewModal = (type: 'intercity' | 'operator', id: string, name: string) => {
+  const handleOpenReviewModal = (type: 'intercity' | 'operator' | 'route' | 'transporter' | 'rank', id: string, name: string) => {
     setReviewTarget({ type, id, name });
     setIsReviewModalOpen(true);
   };
@@ -339,14 +340,22 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
       {activeTab === 'corridors' && (
         <div className="space-y-4">
           {filteredRoutes.length === 0 ? (
-            <div className="bg-white p-8 text-center border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414]">
-              <div className="w-12 h-12 bg-[#F5F5F0] border-2 border-[#141414] text-[#141414] flex items-center justify-center mx-auto mb-3 shadow-[2px_2px_0px_0px_#141414]">
-                <Search className="w-6 h-6" />
+            <div className="bg-white p-8 sm:p-10 text-center border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414] space-y-3">
+              <div className="w-14 h-14 bg-[#F5F5F0] border-2 border-[#141414] text-[#141414] flex items-center justify-center mx-auto shadow-[2px_2px_0px_0px_#F27D26]">
+                <Search className="w-7 h-7 text-[#F27D26]" />
               </div>
-              <h4 className="text-base font-black text-[#141414] uppercase">No corridors found</h4>
-              <p className="text-xs font-bold text-stone-600 mt-1">
-                Try searching for a different destination or clear your filter.
-              </p>
+              <div className="space-y-1 max-w-sm mx-auto">
+                <h4 className="text-base sm:text-lg font-black text-[#141414] uppercase">No Corridors Found</h4>
+                <p className="text-xs sm:text-sm font-medium text-stone-600">
+                  Nothing matches your search or tier filter. Try searching for Harare, Bulawayo, Mutare, or reset filters.
+                </p>
+              </div>
+              <button
+                onClick={() => { setSearchQuery(''); setSelectedTierFilter('all'); }}
+                className="py-2.5 px-5 bg-[#141414] hover:bg-[#F27D26] text-white font-black text-xs uppercase tracking-wider border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] transition cursor-pointer"
+              >
+                Reset Corridor Filters
+              </button>
             </div>
           ) : (
             filteredRoutes.map((route) => (
@@ -510,7 +519,26 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {filteredOperators.map((operator) => (
+            {filteredOperators.length === 0 ? (
+              <div className="col-span-full bg-white p-8 sm:p-10 text-center border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414] space-y-3">
+                <div className="w-14 h-14 bg-[#F5F5F0] border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] flex items-center justify-center mx-auto text-[#141414]">
+                  <Bus className="w-7 h-7 text-[#F27D26]" />
+                </div>
+                <div className="space-y-1 max-w-sm mx-auto">
+                  <h4 className="text-base sm:text-lg font-black text-[#141414] uppercase">No Bus Fleets Found</h4>
+                  <p className="text-xs sm:text-sm font-medium text-stone-600">
+                    No coach companies match your query. City Link, CAG, and other major carriers are listed in the directory.
+                  </p>
+                </div>
+                <button
+                  onClick={() => { setSearchQuery(''); setSelectedTierFilter('all'); }}
+                  className="py-2.5 px-5 bg-[#141414] hover:bg-[#F27D26] text-white font-black text-xs uppercase tracking-wider border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] transition cursor-pointer"
+                >
+                  Show All Bus Companies
+                </button>
+              </div>
+            ) : (
+            filteredOperators.map((operator) => (
               <div
                 key={operator.id}
                 id={`operator-card-${operator.id}`}
@@ -592,9 +620,10 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
                   </button>
                 </div>
               </div>
-            ))}
-          </div>
+            )))
+          }
         </div>
+      </div>
       )}
 
       {/* VIEW 3: LIVE COMMUTER REPORTS */}
@@ -619,8 +648,38 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
 
           <div className="space-y-3">
             {filteredReports.length === 0 ? (
-              <div className="bg-white p-8 text-center border-2 border-[#141414]">
-                <p className="text-xs font-bold text-stone-500">No reports match your search query.</p>
+              <div className="bg-white p-8 sm:p-10 text-center border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414] space-y-3">
+                <div className="w-14 h-14 bg-[#F5F5F0] border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] flex items-center justify-center mx-auto text-[#141414]">
+                  <Bus className="w-7 h-7 text-[#F27D26]" />
+                </div>
+                <div className="space-y-1.5 max-w-md mx-auto">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#F27D26] block">
+                    Clean Production Board
+                  </span>
+                  <h4 className="text-base sm:text-lg font-black text-[#141414] uppercase">
+                    No Coach Reports Submitted Yet
+                  </h4>
+                  <p className="text-xs sm:text-sm font-medium text-stone-600 leading-relaxed">
+                    Nothing is created yet for long-distance bus reports! If you recently travelled with City Link, CAG, Inter Africa, or Rimbi Tours, submit your trip fare, timing, and road notes.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                  <button
+                    onClick={() => setIsReportModalOpen(true)}
+                    className="py-2.5 px-5 bg-[#141414] hover:bg-[#F27D26] text-white font-black text-xs uppercase tracking-wider border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>+ Submit Intercity Trip Report</span>
+                  </button>
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="py-2.5 px-4 bg-[#F5F5F0] hover:bg-stone-200 text-[#141414] font-black text-xs uppercase tracking-wider border-2 border-[#141414] transition cursor-pointer"
+                    >
+                      Clear Search
+                    </button>
+                  )}
+                </div>
               </div>
             ) : (
               filteredReports.map((rep) => {
@@ -825,17 +884,17 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
                       {buzz.amenitiesReview && (
                         <div className="p-2 bg-[#F5F5F0] border border-stone-300 text-[10px] font-black uppercase flex items-center gap-2 flex-wrap mb-2">
                           <span className="text-stone-500">Reported Amenities:</span>
-                          <span className={buzz.amenitiesReview.acWorking ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-stone-400 bg-stone-200 px-1.5 py-0.5'}>
-                            AC: {buzz.amenitiesReview.acWorking ? 'Working' : 'Off'}
+                          <span className={(buzz.amenitiesReview.acWorking ?? buzz.amenitiesReview.ac) ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-stone-400 bg-stone-200 px-1.5 py-0.5'}>
+                            AC: {(buzz.amenitiesReview.acWorking ?? buzz.amenitiesReview.ac) ? 'Working' : 'Off'}
                           </span>
-                          <span className={buzz.amenitiesReview.usbCharging ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-stone-400 bg-stone-200 px-1.5 py-0.5'}>
-                            USB: {buzz.amenitiesReview.usbCharging ? 'Charging' : 'Faulty'}
+                          <span className={(buzz.amenitiesReview.usbCharging ?? buzz.amenitiesReview.usb) ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-stone-400 bg-stone-200 px-1.5 py-0.5'}>
+                            USB: {(buzz.amenitiesReview.usbCharging ?? buzz.amenitiesReview.usb) ? 'Charging' : 'Faulty'}
                           </span>
-                          <span className={buzz.amenitiesReview.wifiWorking ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-stone-400 bg-stone-200 px-1.5 py-0.5'}>
-                            Wi-Fi: {buzz.amenitiesReview.wifiWorking ? 'Connected' : 'No'}
+                          <span className={(buzz.amenitiesReview.wifiWorking ?? buzz.amenitiesReview.wifi) ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-stone-400 bg-stone-200 px-1.5 py-0.5'}>
+                            Wi-Fi: {(buzz.amenitiesReview.wifiWorking ?? buzz.amenitiesReview.wifi) ? 'Connected' : 'No'}
                           </span>
-                          <span className={buzz.amenitiesReview.luggageSecurity ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-red-700 bg-red-100 px-1.5 py-0.5'}>
-                            Luggage: {buzz.amenitiesReview.luggageSecurity ? 'Safe' : 'Risky'}
+                          <span className={(buzz.amenitiesReview.luggageSecurity ?? buzz.amenitiesReview.luggage) ? 'text-emerald-700 bg-emerald-100 px-1.5 py-0.5' : 'text-red-700 bg-red-100 px-1.5 py-0.5'}>
+                            Luggage: {(buzz.amenitiesReview.luggageSecurity ?? buzz.amenitiesReview.luggage) ? 'Safe' : 'Risky'}
                           </span>
                         </div>
                       )}
