@@ -1,0 +1,471 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Boot connection test document
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // Core Authentication & Ownership Helpers (Strict Owner-Only RLS)
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(ownerUid) {
+      return isSignedIn() && ownerUid is string && request.auth.uid == ownerUid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 2 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidReactionId(id) {
+      return id is string && id.size() >= 2 && id.size() <= 256 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isStrLen(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidCommuter(data) {
+      return data.keys().hasAll(['device_id', 'userId', 'ownerUid', 'username', 'handle', 'avatarColor', 'commuterBadge', 'role', 'reputation_score', 'reports_count', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['device_id', 'userId', 'ownerUid', 'username', 'handle', 'name', 'avatarColor', 'commuterBadge', 'role', 'reputation_score', 'reports_count', 'createdAt', 'updatedAt'])
+        && isValidId(data.device_id)
+        && isStrLen(data.userId, 3, 128)
+        && isStrLen(data.ownerUid, 3, 128)
+        && isStrLen(data.username, 1, 40)
+        && isStrLen(data.handle, 1, 45)
+        && (!('name' in data) || isStrLen(data.name, 0, 60))
+        && isStrLen(data.avatarColor, 3, 20)
+        && isStrLen(data.commuterBadge, 1, 60)
+        && data.role in ['commuter', 'transporter']
+        && data.reputation_score is number && data.reputation_score >= 0 && data.reputation_score <= 1000000
+        && data.reports_count is number && data.reports_count >= 0 && data.reports_count <= 1000000
+        && data.createdAt is number && data.createdAt > 0
+        && data.updatedAt is number && data.updatedAt > 0;
+    }
+
+    function isValidPrivateContact(data) {
+      return data.keys().hasAll(['device_id', 'ownerUid', 'updatedAt'])
+        && data.keys().hasOnly(['device_id', 'ownerUid', 'phone', 'updatedAt'])
+        && isValidId(data.device_id)
+        && isStrLen(data.ownerUid, 3, 128)
+        && (!('phone' in data) || isStrLen(data.phone, 0, 40))
+        && data.updatedAt is number && data.updatedAt > 0;
+    }
+
+    function isValidRoute(data) {
+      return data.keys().hasAll(['id', 'name', 'origin', 'destination', 'city', 'category', 'ranksServedIds', 'waypoints', 'ownerUid', 'createdAt'])
+        && data.keys().hasOnly(['id', 'name', 'origin', 'destination', 'city', 'province', 'category', 'distanceKm', 'commonVehicle', 'ranksServedIds', 'waypoints', 'createdByDeviceId', 'createdByUsername', 'ownerUid', 'createdAt'])
+        && isValidId(data.id)
+        && isStrLen(data.name, 2, 120)
+        && isStrLen(data.origin, 1, 100)
+        && isStrLen(data.destination, 1, 100)
+        && isStrLen(data.city, 1, 60)
+        && (!('province' in data) || isStrLen(data.province, 0, 60))
+        && data.category in ['cbd_location', 'near_town', 'inter_city']
+        && (!('distanceKm' in data) || (data.distanceKm is number && data.distanceKm >= 0 && data.distanceKm <= 5000))
+        && (!('commonVehicle' in data) || isStrLen(data.commonVehicle, 0, 100))
+        && data.ranksServedIds is list && data.ranksServedIds.size() <= 20
+        && data.waypoints is list && data.waypoints.size() <= 30
+        && (!('createdByDeviceId' in data) || isStrLen(data.createdByDeviceId, 2, 128))
+        && (!('createdByUsername' in data) || isStrLen(data.createdByUsername, 1, 40))
+        && isStrLen(data.ownerUid, 3, 128)
+        && data.createdAt is number && data.createdAt > 0;
+    }
+
+    function isValidFareReport(data) {
+      return data.keys().hasAll(['id', 'route_id', 'fare_amount', 'currency', 'reported_at', 'reporter_device_id', 'ownerUid', 'upvotes', 'downvotes'])
+        && data.keys().hasOnly(['id', 'route_id', 'fare_amount', 'currency', 'reported_at', 'reporter_device_id', 'ownerUid', 'reporter_username', 'reporter_badge', 'upvotes', 'downvotes', 'source', 'transport_type', 'departure_status', 'route_name', 'city'])
+        && isValidId(data.id)
+        && isStrLen(data.route_id, 2, 128)
+        && data.fare_amount is number && data.fare_amount > 0 && data.fare_amount <= 100000
+        && data.currency in ['USD', 'ZWG', 'ZWL', 'ZAR', 'BWP']
+        && data.reported_at is number && data.reported_at > 0
+        && isValidId(data.reporter_device_id)
+        && isStrLen(data.ownerUid, 3, 128)
+        && (!('reporter_username' in data) || isStrLen(data.reporter_username, 1, 40))
+        && (!('reporter_badge' in data) || isStrLen(data.reporter_badge, 1, 60))
+        && data.upvotes is number && data.upvotes >= 0 && data.upvotes <= 1000000
+        && data.downvotes is number && data.downvotes >= 0 && data.downvotes <= 1000000
+        && (!('source' in data) || isStrLen(data.source, 1, 20))
+        && (!('transport_type' in data) || isStrLen(data.transport_type, 1, 100))
+        && (!('departure_status' in data) || isStrLen(data.departure_status, 1, 120))
+        && (!('route_name' in data) || isStrLen(data.route_name, 1, 120))
+        && (!('city' in data) || isStrLen(data.city, 1, 60));
+    }
+
+    function isValidStatusReport(data) {
+      return data.keys().hasAll(['id', 'route_id', 'type', 'reported_at', 'expires_at', 'reporter_device_id', 'ownerUid'])
+        && data.keys().hasOnly(['id', 'route_id', 'type', 'note', 'reported_at', 'expires_at', 'reporter_device_id', 'ownerUid', 'reporter_username', 'source'])
+        && isValidId(data.id)
+        && isStrLen(data.route_id, 2, 128)
+        && data.type in ['running', 'delayed', 'diverted', 'police_blitz', 'fuel_shortage']
+        && (!('note' in data) || isStrLen(data.note, 0, 120))
+        && data.reported_at is number && data.reported_at > 0
+        && data.expires_at is number && data.expires_at >= data.reported_at
+        && isValidId(data.reporter_device_id)
+        && isStrLen(data.ownerUid, 3, 128)
+        && (!('reporter_username' in data) || isStrLen(data.reporter_username, 1, 40))
+        && (!('source' in data) || isStrLen(data.source, 1, 20));
+    }
+
+    function isValidIntercityReport(data) {
+      return data.keys().hasAll(['id', 'routeId', 'operatorId', 'operatorName', 'farePaidUSD', 'departureTerminal', 'seatAvailability', 'busConditionRating', 'reportedAt', 'reporterDeviceId', 'ownerUid', 'upvotes', 'downvotes'])
+        && data.keys().hasOnly(['id', 'routeId', 'operatorId', 'operatorName', 'farePaidUSD', 'farePaidZiG', 'farePaidZAR', 'departureTime', 'departureTerminal', 'seatAvailability', 'busConditionRating', 'roadStatusNote', 'reportedAt', 'reporterDeviceId', 'ownerUid', 'reporterUsername', 'upvotes', 'downvotes'])
+        && isValidId(data.id)
+        && isStrLen(data.routeId, 2, 128)
+        && isStrLen(data.operatorId, 1, 128)
+        && isStrLen(data.operatorName, 1, 100)
+        && data.farePaidUSD is number && data.farePaidUSD > 0 && data.farePaidUSD <= 1000
+        && (!('farePaidZiG' in data) || (data.farePaidZiG is number && data.farePaidZiG >= 0))
+        && (!('farePaidZAR' in data) || (data.farePaidZAR is number && data.farePaidZAR >= 0))
+        && (!('departureTime' in data) || isStrLen(data.departureTime, 0, 40))
+        && isStrLen(data.departureTerminal, 1, 120)
+        && data.seatAvailability in ['plenty', 'filling_fast', 'full']
+        && data.busConditionRating is number && data.busConditionRating >= 1 && data.busConditionRating <= 5
+        && (!('roadStatusNote' in data) || isStrLen(data.roadStatusNote, 0, 150))
+        && data.reportedAt is number && data.reportedAt > 0
+        && isValidId(data.reporterDeviceId)
+        && isStrLen(data.ownerUid, 3, 128)
+        && (!('reporterUsername' in data) || isStrLen(data.reporterUsername, 1, 40))
+        && data.upvotes is number && data.upvotes >= 0 && data.upvotes <= 1000000
+        && data.downvotes is number && data.downvotes >= 0 && data.downvotes <= 1000000;
+    }
+
+    function isValidTransporter(data) {
+      return data.keys().hasAll(['id', 'operatorName', 'contactPhone', 'transportType', 'transportTypeLabel', 'currentRouteName', 'city', 'status', 'registeredAt', 'lastRouteUpdate', 'registeredByDeviceId', 'ownerUid', 'likes'])
+        && data.keys().hasOnly(['id', 'operatorName', 'contactPhone', 'transportType', 'transportTypeLabel', 'currentRouteName', 'currentRouteId', 'city', 'vehiclePlate', 'baseTerminus', 'status', 'statusNote', 'registeredAt', 'lastRouteUpdate', 'registeredByDeviceId', 'ownerUid', 'username', 'userHandle', 'likes'])
+        && isValidId(data.id)
+        && isStrLen(data.operatorName, 1, 100)
+        && isStrLen(data.contactPhone, 4, 40)
+        && isStrLen(data.transportType, 2, 50)
+        && isStrLen(data.transportTypeLabel, 2, 80)
+        && isStrLen(data.currentRouteName, 1, 120)
+        && (!('currentRouteId' in data) || isStrLen(data.currentRouteId, 1, 128))
+        && isStrLen(data.city, 1, 60)
+        && (!('vehiclePlate' in data) || isStrLen(data.vehiclePlate, 0, 30))
+        && (!('baseTerminus' in data) || isStrLen(data.baseTerminus, 0, 100))
+        && data.status in ['active', 'loading', 'available_hire', 'off_duty']
+        && (!('statusNote' in data) || isStrLen(data.statusNote, 0, 160))
+        && data.registeredAt is number && data.registeredAt > 0
+        && data.lastRouteUpdate is number && data.lastRouteUpdate >= data.registeredAt
+        && isValidId(data.registeredByDeviceId)
+        && isStrLen(data.ownerUid, 3, 128)
+        && (!('username' in data) || isStrLen(data.username, 1, 40))
+        && (!('userHandle' in data) || isStrLen(data.userHandle, 1, 45))
+        && data.likes is number && data.likes >= 0 && data.likes <= 1000000;
+    }
+
+    function isValidSocialInteraction(data) {
+      return data.keys().hasAll(['id', 'targetType', 'targetId', 'targetName', 'username', 'userHandle', 'userBadge', 'avatarBg', 'comment', 'likes', 'dislikes', 'createdAt', 'deviceId', 'ownerUid'])
+        && data.keys().hasOnly(['id', 'targetType', 'targetId', 'targetName', 'postType', 'username', 'userHandle', 'userBadge', 'avatarBg', 'comment', 'rating', 'likes', 'dislikes', 'createdAt', 'updatedAt', 'deviceId', 'ownerUid', 'mentionedHandles', 'mentionedDeviceIds', 'recommendedLocation', 'recommendedCommuterUsername', 'confirmedFare', 'confirmedDepartureTime', 'amenitiesReview', 'isAbuseReport', 'abuseType', 'abuseLocation', 'abusePlateNumber'])
+        && isValidId(data.id)
+        && data.targetType in ['route', 'intercity', 'operator', 'rank', 'transporter', 'commuter']
+        && (!('postType' in data) || data.postType in ['conversation', 'question', 'recommendation', 'review', 'abuse'])
+        && isStrLen(data.targetId, 1, 128)
+        && isStrLen(data.targetName, 1, 120)
+        && isStrLen(data.username, 1, 40)
+        && isStrLen(data.userHandle, 1, 45)
+        && isStrLen(data.userBadge, 1, 60)
+        && isStrLen(data.avatarBg, 3, 20)
+        && isStrLen(data.comment, 1, 500)
+        && (!('rating' in data) || (data.rating is number && data.rating >= 1 && data.rating <= 5))
+        && data.likes is number && data.likes >= 0 && data.likes <= 1000000
+        && data.dislikes is number && data.dislikes >= 0 && data.dislikes <= 1000000
+        && data.createdAt is number && data.createdAt > 0
+        && (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= data.createdAt))
+        && isValidId(data.deviceId)
+        && isStrLen(data.ownerUid, 3, 128)
+        && (!('mentionedHandles' in data) || (data.mentionedHandles is list && data.mentionedHandles.size() <= 20))
+        && (!('mentionedDeviceIds' in data) || (data.mentionedDeviceIds is list && data.mentionedDeviceIds.size() <= 20))
+        && (!('recommendedLocation' in data) || isStrLen(data.recommendedLocation, 0, 120))
+        && (!('recommendedCommuterUsername' in data) || isStrLen(data.recommendedCommuterUsername, 0, 60))
+        && (!('confirmedDepartureTime' in data) || isStrLen(data.confirmedDepartureTime, 0, 80))
+        && (!('isAbuseReport' in data) || data.isAbuseReport is bool)
+        && (!('abuseType' in data) || isStrLen(data.abuseType, 1, 40))
+        && (!('abuseLocation' in data) || isStrLen(data.abuseLocation, 0, 100))
+        && (!('abusePlateNumber' in data) || isStrLen(data.abusePlateNumber, 0, 30));
+    }
+
+    function isValidSocialReply(data) {
+      return data.keys().hasAll(['id', 'interactionId', 'deviceId', 'ownerUid', 'username', 'userHandle', 'userBadge', 'avatarBg', 'comment', 'createdAt'])
+        && data.keys().hasOnly(['id', 'interactionId', 'parentAuthorDeviceId', 'parentAuthorUsername', 'deviceId', 'ownerUid', 'username', 'userHandle', 'userBadge', 'avatarBg', 'comment', 'mentionedHandles', 'mentionedDeviceIds', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.interactionId)
+        && (!('parentAuthorDeviceId' in data) || isStrLen(data.parentAuthorDeviceId, 2, 128))
+        && (!('parentAuthorUsername' in data) || isStrLen(data.parentAuthorUsername, 1, 40))
+        && isValidId(data.deviceId)
+        && isStrLen(data.ownerUid, 3, 128)
+        && isStrLen(data.username, 1, 40)
+        && isStrLen(data.userHandle, 1, 45)
+        && isStrLen(data.userBadge, 1, 60)
+        && isStrLen(data.avatarBg, 3, 20)
+        && isStrLen(data.comment, 1, 500)
+        && (!('mentionedHandles' in data) || (data.mentionedHandles is list && data.mentionedHandles.size() <= 20))
+        && (!('mentionedDeviceIds' in data) || (data.mentionedDeviceIds is list && data.mentionedDeviceIds.size() <= 20))
+        && data.createdAt is number && data.createdAt > 0
+        && (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= data.createdAt));
+    }
+
+    function isValidSocialReaction(data) {
+      return data.keys().hasAll(['id', 'targetType', 'targetId', 'reaction', 'deviceId', 'ownerUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'targetType', 'targetId', 'reaction', 'deviceId', 'ownerUid', 'username', 'createdAt', 'updatedAt'])
+        && isValidReactionId(data.id)
+        && data.targetType in ['fare', 'intercity', 'transporter', 'social']
+        && isStrLen(data.targetId, 1, 128)
+        && data.reaction in ['up', 'down', 'like', 'dislike']
+        && isValidId(data.deviceId)
+        && isStrLen(data.ownerUid, 3, 128)
+        && (!('username' in data) || isStrLen(data.username, 1, 40))
+        && data.createdAt is number && data.createdAt > 0
+        && data.updatedAt is number && data.updatedAt >= data.createdAt;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['id', 'type', 'recipientDeviceId', 'senderDeviceId', 'senderUid', 'senderUsername', 'senderHandle', 'targetType', 'targetId', 'snippet', 'read', 'createdAt'])
+        && data.keys().hasOnly(['id', 'type', 'recipientDeviceId', 'recipientUid', 'senderDeviceId', 'senderUid', 'senderUsername', 'senderHandle', 'targetType', 'targetId', 'postId', 'snippet', 'read', 'createdAt'])
+        && isValidId(data.id)
+        && data.type in ['reply', 'tag', 'like', 'rating']
+        && isValidId(data.recipientDeviceId)
+        && (!('recipientUid' in data) || isStrLen(data.recipientUid, 3, 128))
+        && isValidId(data.senderDeviceId)
+        && isStrLen(data.senderUid, 3, 128)
+        && isStrLen(data.senderUsername, 1, 40)
+        && isStrLen(data.senderHandle, 1, 45)
+        && isStrLen(data.targetType, 1, 40)
+        && isStrLen(data.targetId, 1, 128)
+        && (!('postId' in data) || isStrLen(data.postId, 1, 128))
+        && isStrLen(data.snippet, 1, 200)
+        && data.read is bool
+        && data.createdAt is number && data.createdAt > 0;
+    }
+
+    function isValidBoarding(data) {
+      return data.keys().hasAll(['id', 'rankId', 'rankName', 'city', 'deviceId', 'ownerUid', 'username', 'userHandle', 'statement', 'createdAt'])
+        && data.keys().hasOnly(['id', 'rankId', 'rankName', 'city', 'deviceId', 'ownerUid', 'username', 'userHandle', 'statement', 'lat', 'lng', 'locationSource', 'createdAt'])
+        && isValidId(data.id)
+        && isStrLen(data.rankId, 2, 128)
+        && isStrLen(data.rankName, 1, 120)
+        && isStrLen(data.city, 1, 60)
+        && isValidId(data.deviceId)
+        && isStrLen(data.ownerUid, 3, 128)
+        && isStrLen(data.username, 1, 40)
+        && isStrLen(data.userHandle, 1, 45)
+        && isStrLen(data.statement, 1, 120)
+        && (!('lat' in data) || (data.lat is number && data.lat >= -90 && data.lat <= 90))
+        && (!('lng' in data) || (data.lng is number && data.lng >= -180 && data.lng <= 180))
+        && (!('locationSource' in data) || isStrLen(data.locationSource, 1, 20))
+        && data.createdAt is number && data.createdAt > 0;
+    }
+
+    function isValidLocationAnchor(data) {
+      return data.keys().hasAll(['deviceId', 'ownerUid', 'username', 'lat', 'lng', 'name', 'source', 'timestamp'])
+        && data.keys().hasOnly(['deviceId', 'ownerUid', 'username', 'lat', 'lng', 'name', 'source', 'accuracyMeters', 'nearestRankId', 'nearestRankName', 'timestamp'])
+        && isValidId(data.deviceId)
+        && isStrLen(data.ownerUid, 3, 128)
+        && isStrLen(data.username, 1, 40)
+        && data.lat is number && data.lat >= -90 && data.lat <= 90
+        && data.lng is number && data.lng >= -180 && data.lng <= 180
+        && isStrLen(data.name, 1, 120)
+        && data.source in ['gps', 'preset', 'manual']
+        && (!('accuracyMeters' in data) || (data.accuracyMeters is number && data.accuracyMeters >= 0))
+        && (!('nearestRankId' in data) || isStrLen(data.nearestRankId, 1, 128))
+        && (!('nearestRankName' in data) || isStrLen(data.nearestRankName, 1, 120))
+        && data.timestamp is number && data.timestamp > 0;
+    }
+
+    // Commuter public identities (read-only to peers; strict owner-only CRUD)
+    match /commuters/{deviceId} {
+      allow get: if isValidId(deviceId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(deviceId) && isValidCommuter(incoming())
+        && incoming().device_id == deviceId && incoming().ownerUid == request.auth.uid;
+      allow update: if isOwner(existing().ownerUid) && isValidId(deviceId) && isValidCommuter(incoming())
+        && incoming().device_id == existing().device_id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['userId', 'username', 'handle', 'name', 'avatarColor', 'commuterBadge', 'role', 'reputation_score', 'reports_count', 'updatedAt']);
+      allow delete: if isOwner(existing().ownerUid);
+
+      // Private PII subcollection (phone number strictly owner-only read & write)
+      match /private/{docId} {
+        allow get, list: if isSignedIn() && isOwner(resource.data.ownerUid);
+        allow create: if isSignedIn() && isValidId(deviceId) && isValidId(docId)
+          && isValidPrivateContact(incoming()) && incoming().device_id == deviceId && incoming().ownerUid == request.auth.uid;
+        allow update: if isOwner(existing().ownerUid) && isValidPrivateContact(incoming())
+          && incoming().device_id == existing().device_id
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().diff(existing()).affectedKeys().hasOnly(['phone', 'updatedAt']);
+        allow delete: if isOwner(existing().ownerUid);
+      }
+    }
+
+    // Crowdsourced commuter routes (owner-only CRUD)
+    match /routes/{routeId} {
+      allow get: if isValidId(routeId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(routeId) && isValidRoute(incoming())
+        && incoming().id == routeId && incoming().ownerUid == request.auth.uid;
+      allow update: if isOwner(existing().ownerUid) && isValidRoute(incoming())
+        && incoming().id == existing().id && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isOwner(existing().ownerUid);
+    }
+
+    // Live fare reports (read-only to peers; strict owner-only CRUD)
+    match /fare_reports/{fareId} {
+      allow get: if isValidId(fareId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(fareId) && isValidFareReport(incoming())
+        && incoming().id == fareId && incoming().ownerUid == request.auth.uid;
+      allow update: if isOwner(existing().ownerUid) && isValidFareReport(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().reporter_device_id == existing().reporter_device_id
+        && incoming().reported_at == existing().reported_at;
+      allow delete: if isOwner(existing().ownerUid);
+    }
+
+    // Live road status alerts (read-only to peers; strict owner-only CRUD)
+    match /status_reports/{statusId} {
+      allow get: if isValidId(statusId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(statusId) && isValidStatusReport(incoming())
+        && incoming().id == statusId && incoming().ownerUid == request.auth.uid;
+      allow update: if isOwner(existing().ownerUid) && isValidStatusReport(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().reporter_device_id == existing().reporter_device_id
+        && incoming().reported_at == existing().reported_at;
+      allow delete: if isOwner(existing().ownerUid);
+    }
+
+    // Intercity coach trip reports (read-only to peers; strict owner-only CRUD)
+    match /intercity_reports/{reportId} {
+      allow get: if isValidId(reportId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(reportId) && isValidIntercityReport(incoming())
+        && incoming().id == reportId && incoming().ownerUid == request.auth.uid;
+      allow update: if isOwner(existing().ownerUid) && isValidIntercityReport(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().reporterDeviceId == existing().reporterDeviceId
+        && incoming().reportedAt == existing().reportedAt;
+      allow delete: if isOwner(existing().ownerUid);
+    }
+
+    // Registered transporters & vehicle fleets (read-only to peers; strict owner-only CRUD)
+    match /transporters/{transporterId} {
+      allow get: if isValidId(transporterId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(transporterId) && isValidTransporter(incoming())
+        && incoming().id == transporterId && incoming().ownerUid == request.auth.uid;
+      allow update: if isOwner(existing().ownerUid) && isValidTransporter(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().registeredByDeviceId == existing().registeredByDeviceId
+        && incoming().registeredAt == existing().registeredAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['currentRouteName', 'currentRouteId', 'city', 'baseTerminus', 'status', 'statusNote', 'contactPhone', 'lastRouteUpdate']);
+      allow delete: if isOwner(existing().ownerUid);
+    }
+
+    // Social commuter buzz posts (read-only to peers; strict owner-only CRUD)
+    match /social_interactions/{interactionId} {
+      allow get: if isValidId(interactionId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(interactionId) && isValidSocialInteraction(incoming())
+        && incoming().id == interactionId && incoming().ownerUid == request.auth.uid;
+      allow update: if isOwner(existing().ownerUid) && isValidSocialInteraction(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().deviceId == existing().deviceId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['comment', 'rating', 'mentionedHandles', 'mentionedDeviceIds', 'updatedAt']);
+      allow delete: if isOwner(existing().ownerUid);
+    }
+
+    // Threaded replies to Commuter Buzz posts (read-only to peers; strict owner-only CRUD)
+    match /social_replies/{replyId} {
+      allow get: if isValidId(replyId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(replyId) && isValidSocialReply(incoming())
+        && incoming().id == replyId && incoming().ownerUid == request.auth.uid;
+      allow update: if isOwner(existing().ownerUid) && isValidSocialReply(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().interactionId == existing().interactionId
+        && incoming().deviceId == existing().deviceId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['comment', 'mentionedHandles', 'mentionedDeviceIds', 'updatedAt']);
+      allow delete: if isOwner(existing().ownerUid);
+    }
+
+    // Owner-owned reactions/votes (eliminates cross-user document updates)
+    match /social_reactions/{reactionId} {
+      allow get: if isValidReactionId(reactionId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidReactionId(reactionId) && isValidSocialReaction(incoming())
+        && incoming().id == reactionId && incoming().ownerUid == request.auth.uid;
+      allow update: if isOwner(existing().ownerUid) && isValidSocialReaction(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().deviceId == existing().deviceId
+        && incoming().targetType == existing().targetType
+        && incoming().targetId == existing().targetId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['reaction', 'username', 'updatedAt']);
+      allow delete: if isOwner(existing().ownerUid);
+    }
+
+    // Commuter Buzz Notifications (@tags, replies, likes, ratings)
+    match /notifications/{notifId} {
+      allow get: if isSignedIn() && (resource.data.recipientUid == request.auth.uid || resource.data.senderUid == request.auth.uid);
+      allow list: if isSignedIn() && (resource.data.recipientUid == request.auth.uid || resource.data.senderUid == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(notifId) && isValidNotification(incoming())
+        && incoming().id == notifId && incoming().senderUid == request.auth.uid;
+      allow update: if isSignedIn() && existing().recipientUid == request.auth.uid
+        && isValidNotification(incoming())
+        && incoming().id == existing().id
+        && incoming().senderUid == existing().senderUid
+        && incoming().recipientUid == existing().recipientUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['read']);
+      allow delete: if isSignedIn() && (existing().recipientUid == request.auth.uid || existing().senderUid == request.auth.uid);
+    }
+
+    // One-tap "I boarded here" confirmations per rank/terminus (owner-only CRUD)
+    match /boarding_confirmations/{boardingId} {
+      allow get: if isValidId(boardingId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(boardingId) && isValidBoarding(incoming())
+        && incoming().id == boardingId && incoming().ownerUid == request.auth.uid;
+      allow update, delete: if isOwner(existing().ownerUid);
+    }
+
+    // Geolocation tags & anchors (owner-only CRUD)
+    match /location_anchors/{deviceId} {
+      allow get: if isValidId(deviceId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(deviceId) && isValidLocationAnchor(incoming())
+        && incoming().deviceId == deviceId && incoming().ownerUid == request.auth.uid;
+      allow update: if isOwner(existing().ownerUid) && isValidId(deviceId) && isValidLocationAnchor(incoming())
+        && incoming().deviceId == existing().deviceId
+        && incoming().ownerUid == existing().ownerUid;
+      allow delete: if isOwner(existing().ownerUid);
+    }
+  }
+}

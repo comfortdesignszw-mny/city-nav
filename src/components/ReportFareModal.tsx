@@ -58,24 +58,22 @@ export const ReportFareModal: React.FC<ReportFareModalProps> = ({
 
   // Preset buttons for fast 2-tap reporting
   const usdPresets = ['0.50', '0.75', '1.00', '1.50', '2.00'];
-  const zwlPresets = ['15', '20', '25', '30', '40'];
+  const zwgPresets = ['15', '20', '28', '40', '55'];
   const zarPresets = ['10', '15', '20', '30', '50'];
-  const bwpPresets = ['10', '15', '20', '25', '50'];
 
   const handleCurrencyChange = (newCurr: Currency) => {
     setCurrency(newCurr);
     if (newCurr === 'USD') setAmount('0.50');
-    else if (newCurr === 'ZWL') setAmount('20');
+    else if (newCurr === 'ZWG' || newCurr === 'ZWL') setAmount('20');
     else if (newCurr === 'ZAR') setAmount('10');
-    else if (newCurr === 'BWP') setAmount('15');
   };
 
   const getCurrentPresets = () => {
     switch (currency) {
       case 'USD': return usdPresets;
-      case 'ZWL': return zwlPresets;
+      case 'ZWG':
+      case 'ZWL': return zwgPresets;
       case 'ZAR': return zarPresets;
-      case 'BWP': return bwpPresets;
       default: return usdPresets;
     }
   };
@@ -83,9 +81,9 @@ export const ReportFareModal: React.FC<ReportFareModalProps> = ({
   const getCurrencyPrefix = () => {
     switch (currency) {
       case 'USD': return '$';
-      case 'ZWL': return 'ZiG';
+      case 'ZWG':
+      case 'ZWL': return 'ZWG ';
       case 'ZAR': return 'R';
-      case 'BWP': return 'P';
       default: return '$';
     }
   };
@@ -146,13 +144,13 @@ export const ReportFareModal: React.FC<ReportFareModalProps> = ({
           </div>
         ) : (
           <div className="p-5 space-y-4">
-            {/* Currency Switcher: USD, ZiG, Rand (ZAR), Pula (BWP) */}
+            {/* Currency Switcher: USD, ZWG, ZAR */}
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-xs font-black text-[#141414] uppercase tracking-wider">Select Currency</label>
-                <span className="text-[10px] font-bold text-[#F27D26]">Byo = Rands • Plumtree = Pula</span>
+                <span className="text-[10px] font-bold text-[#F27D26]">USD • ZWG • ZAR (Rand)</span>
               </div>
-              <div className="grid grid-cols-4 gap-1.5">
+              <div className="grid grid-cols-3 gap-1.5">
                 <button
                   type="button"
                   onClick={() => handleCurrencyChange('USD')}
@@ -166,14 +164,14 @@ export const ReportFareModal: React.FC<ReportFareModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleCurrencyChange('ZWL')}
+                  onClick={() => handleCurrencyChange('ZWG')}
                   className={`py-2 px-1 text-xs font-black uppercase tracking-wider transition flex items-center justify-center gap-1 border-2 border-[#141414] cursor-pointer ${
-                    currency === 'ZWL'
+                    currency === 'ZWG' || currency === 'ZWL'
                       ? 'bg-[#141414] text-white shadow-[2px_2px_0px_0px_#F27D26]'
                       : 'bg-[#F5F5F0] text-[#141414] hover:bg-white'
                   }`}
                 >
-                  <span>ZiG</span>
+                  <span>ZWG</span>
                 </button>
                 <button
                   type="button"
@@ -184,18 +182,7 @@ export const ReportFareModal: React.FC<ReportFareModalProps> = ({
                       : 'bg-[#F5F5F0] text-[#141414] hover:bg-white'
                   }`}
                 >
-                  <span>Rand (R)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleCurrencyChange('BWP')}
-                  className={`py-2 px-1 text-xs font-black uppercase tracking-wider transition flex items-center justify-center gap-1 border-2 border-[#141414] cursor-pointer ${
-                    currency === 'BWP'
-                      ? 'bg-[#141414] text-white shadow-[2px_2px_0px_0px_#F27D26]'
-                      : 'bg-[#F5F5F0] text-[#141414] hover:bg-white'
-                  }`}
-                >
-                  <span>Pula (P)</span>
+                  <span>ZAR (R)</span>
                 </button>
               </div>
             </div>

@@ -19,13 +19,17 @@ import {
   Crosshair,
   Search,
   Plus,
-  Share2
+  Share2,
+  Star,
+  MessageSquare,
+  Users
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
 import { Rank, RouteItem, UserLocation } from '../types';
-import { formatCurrency, getStatusConfig } from '../utils/formatters';
+import { formatCurrency, formatDisplayFare, formatTimeAgo, getStatusConfig } from '../utils/formatters';
 import { UserLocationBar } from './UserLocationBar';
 import { AddRouteFareModal } from './AddRouteFareModal';
+import { AddReviewAbuseModal } from './AddReviewAbuseModal';
 import { 
   calculateDistanceKm, 
   calculateBearing, 
@@ -71,12 +75,15 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
   const allRanks = store.getRanks();
   const routes = store.getRoutes();
   const userLocation = store.getUserLocation();
+  const displayCurrency = store.getDisplayCurrency();
 
   const [selectedCity, setSelectedCity] = useState<string>('All Cities');
   const [rankTypeFilter, setRankTypeFilter] = useState<RankTypeFilter>('all');
   const [searchFilter, setSearchFilter] = useState<string>('');
   const [copiedCoords, setCopiedCoords] = useState(false);
   const [isAddRouteOpen, setIsAddRouteOpen] = useState(false);
+  const [isRankReviewOpen, setIsRankReviewOpen] = useState(false);
+  const [boardingNotice, setBoardingNotice] = useState<string | null>(null);
 
   // Compute ranks sorted by proximity to the user's current GPS location
   const ranksWithProximity = useMemo(() => {
@@ -433,7 +440,66 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
                 </button>
               </div>
 
-              {/* Navigation Actions */}
+              {/* Boarding Counter & Recent Commuters */}
+              <div className="p-3 bg-stone-900 border border-[#F27D26] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-black uppercase text-white flex items-center gap-1.5">
+                      <Users className="w-4 h-4 text-[#F27D26]" />
+                      {store.getBoardingStatementForRank(activeRank.id)}
+                    </span>
+                    {(() => {
+                      const summary = store.getRatingSummaryForTarget('rank', activeRank.id);
+                      return summary.count > 0 ? (
+                        <span className="bg-[#F27D26] text-white px-2 py-0.5 text-[10px] font-black uppercase flex items-center gap-1">
+                          <Star className="w-3 h-3 fill-white" />
+                          {summary.avg}/5 ({summary.count})
+                        </span>
+                      ) : null;
+                    })()}
+                  </div>
+                  {(() => {
+                    const recent = store.getBoardingConfirmationsForRank(activeRank.id).slice(0, 3);
+                    if (recent.length === 0) return null;
+                    return (
+                      <p className="text-[10px] text-stone-400 font-bold mt-1">
+                        Recent: {recent.map((b) => `${b.username} (${formatTimeAgo(b.createdAt)})`).join(' • ')}
+                      </p>
+                    );
+                  })()}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const res = store.confirmBoardingAtRank(activeRank.id);
+                    if (res.success) {
+                      setBoardingNotice(
+                        res.alreadyBoarded
+                          ? `You already confirmed boarding at ${activeRank.name} recently.`
+                          : `"I boarded here" confirmed at ${activeRank.name} & synced!`
+                      );
+                      setTimeout(() => setBoardingNotice(null), 3500);
+                    }
+                  }}
+                  className={`px-4 py-2 text-xs font-black uppercase tracking-wider border-2 border-white transition cursor-pointer flex items-center justify-center gap-1.5 flex-shrink-0 ${
+                    store.hasUserBoardedRankRecently(activeRank.id)
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-[#F27D26] hover:bg-white hover:text-[#141414] text-white shadow-[2px_2px_0px_0px_#ffffff]'
+                  }`}
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{store.hasUserBoardedRankRecently(activeRank.id) ? 'Boarded Here ✓' : 'I boarded here'}</span>
+                </button>
+              </div>
+
+              {boardingNotice && (
+                <div className="p-2 bg-emerald-900 border border-emerald-400 text-emerald-100 text-[11px] font-black uppercase tracking-wider">
+                  {boardingNotice}
+                </div>
+              )}
+
+              {/* Navigation & Rating Actions */}
               <div className="flex flex-col sm:flex-row gap-2 pt-1">
                 <button
                   onClick={handleOpenNativeNavigation}
@@ -441,6 +507,14 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
                 >
                   <Navigation className="w-4 h-4" />
                   <span>Turn-by-Turn GPS Navigation</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsRankReviewOpen(true)}
+                  className="px-4 py-2.5 bg-white hover:bg-[#F27D26] text-[#141414] hover:text-white text-xs font-black uppercase tracking-wider border-2 border-white transition flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  <span>Rate / Comment Terminus</span>
                 </button>
               </div>
             </div>
@@ -542,6 +616,32 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
                       {rn.kombiTypes}
                     </p>
                   )}
+
+                  {/* Boarding Counter + One-Tap "I boarded here" */}
+                  <div className={`mt-2 p-2 border flex items-center justify-between gap-2 ${
+                    isSelected ? 'bg-stone-900 border-stone-700' : 'bg-white border-[#141414]'
+                  }`}>
+                    <span className={`text-[10px] font-black flex items-center gap-1 ${
+                      isSelected ? 'text-white' : 'text-[#141414]'
+                    }`}>
+                      <Users className="w-3 h-3 text-[#F27D26]" />
+                      {store.getBoardingStatementForRank(rn.id)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        store.confirmBoardingAtRank(rn.id);
+                      }}
+                      className={`px-2 py-0.5 text-[9px] font-black uppercase border transition cursor-pointer ${
+                        store.hasUserBoardedRankRecently(rn.id)
+                          ? 'bg-emerald-600 text-white border-white'
+                          : 'bg-[#F27D26] hover:bg-[#141414] text-white border-[#141414]'
+                      }`}
+                    >
+                      {store.hasUserBoardedRankRecently(rn.id) ? 'Boarded ✓' : 'I boarded here'}
+                    </button>
+                  </div>
                 </div>
 
                 <div className={`mt-3 pt-2 border-t flex items-center justify-between text-[10px] font-bold ${
@@ -627,7 +727,9 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
                     <div className="flex items-center gap-3 sm:flex-col sm:items-end justify-between border-t sm:border-t-0 border-stone-300 pt-2 sm:pt-0">
                       <div className="text-right">
                         <div className="text-base font-black text-[#141414]">
-                          {latestFare ? formatCurrency(latestFare.fare_amount, latestFare.currency) : '$1.00 USD'}
+                          {latestFare
+                            ? formatDisplayFare(latestFare.fare_amount, latestFare.currency, displayCurrency)
+                            : formatDisplayFare(1, 'USD', displayCurrency)}
                         </div>
                         <div className="text-[10px] font-bold text-stone-500">
                           {latestFare?.transport_type || 'Kombi'}
@@ -646,6 +748,65 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
         </div>
       )}
 
+      {/* 6. Community Ratings & Comments on Active Bus Terminus */}
+      {activeRank && (
+        <div className="bg-white border-2 border-[#141414] p-4 sm:p-5 shadow-[4px_4px_0px_0px_#141414] space-y-3">
+          <div className="flex items-center justify-between border-b-2 border-[#141414] pb-2.5 gap-2 flex-wrap">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-widest text-[#F27D26]">
+                Terminus Reviews &amp; Ratings
+              </span>
+              <h3 className="text-base sm:text-lg font-black uppercase tracking-tight text-[#141414]">
+                Commuter Feedback for {activeRank.name}
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsRankReviewOpen(true)}
+              className="px-3 py-1.5 bg-[#141414] hover:bg-[#F27D26] text-white text-xs font-black uppercase border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] cursor-pointer flex items-center gap-1.5"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span>Rate / Comment Terminus</span>
+            </button>
+          </div>
+
+          {(() => {
+            const rankReviews = store.getSocialInteractions('rank', activeRank.id);
+            if (rankReviews.length === 0) {
+              return (
+                <div className="p-5 bg-[#F5F5F0] border-2 border-[#141414] text-center space-y-2">
+                  <p className="text-xs font-bold text-stone-600">
+                    No commuter reviews or safety ratings for {activeRank.name} yet.
+                  </p>
+                </div>
+              );
+            }
+            return (
+              <div className="space-y-2">
+                {rankReviews.map((rev) => (
+                  <div key={rev.id} className="p-3 bg-[#F5F5F0] border-2 border-[#141414]">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="text-xs font-black text-[#141414]">
+                        {rev.username} <span className="text-stone-500 font-bold">{rev.userHandle}</span>
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {rev.rating && (
+                          <span className="text-[10px] font-black bg-[#141414] text-[#F27D26] px-1.5 py-0.5">
+                            ★ {rev.rating}/5
+                          </span>
+                        )}
+                        <span className="text-[10px] font-bold text-stone-500">{formatTimeAgo(rev.createdAt)}</span>
+                      </div>
+                    </div>
+                    <p className="text-xs font-bold text-stone-800">{rev.comment}</p>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
       {/* Add Route & Fare Modal */}
       {isAddRouteOpen && activeRank && (
         <AddRouteFareModal
@@ -656,6 +817,17 @@ export const RankFinderView: React.FC<RankFinderViewProps> = ({
             setIsAddRouteOpen(false);
             onSelectRoute(routeId);
           }}
+        />
+      )}
+
+      {/* Rate / Comment Terminus Modal */}
+      {isRankReviewOpen && activeRank && (
+        <AddReviewAbuseModal
+          isOpen={isRankReviewOpen}
+          onClose={() => setIsRankReviewOpen(false)}
+          targetType="rank"
+          targetId={activeRank.id}
+          targetName={activeRank.name}
         />
       )}
     </div>

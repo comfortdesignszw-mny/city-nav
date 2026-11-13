@@ -1,13 +1,11 @@
 import React, { useState } from 'react';
 import { 
-  User, 
   ShieldCheck, 
   CloudUpload, 
   RefreshCw, 
   Clock, 
   Phone, 
   Check, 
-  AlertCircle, 
   Copy, 
   Wifi, 
   WifiOff, 
@@ -15,20 +13,20 @@ import {
   DollarSign, 
   Radio, 
   ChevronRight,
-  Sparkles,
   Edit3,
-  Award,
-  AtSign,
-  Download,
-  Smartphone,
   Save,
   PlusCircle,
-  X
+  Database,
+  MapPin,
+  Trash2,
+  LogIn,
+  LogOut
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
-import { formatTimeAgo, formatCurrency, getStatusConfig } from '../utils/formatters';
+import { formatTimeAgo, formatCurrency, formatDisplayFare, getStatusConfig } from '../utils/formatters';
 import { PWAInstallButton } from './PWAInstallButton';
 import { AddRouteFareModal } from './AddRouteFareModal';
+import { signInWithGoogle, signOutCloud } from '../services/firebase';
 
 interface MyReportsViewProps {
   onSelectRoute: (routeId: string) => void;
@@ -46,25 +44,31 @@ const BADGE_OPTIONS = [
 ];
 
 const AVATAR_COLORS = [
-  '#F27D26', // Fambai Orange
-  '#141414', // Jet Black
-  '#2563EB', // Blue
-  '#059669', // Emerald
-  '#7C3AED', // Purple
-  '#DB2777', // Pink
-  '#DC2626', // Crimson
-  '#0891B2', // Cyan
+  '#F27D26',
+  '#141414',
+  '#2563EB',
+  '#059669',
+  '#7C3AED',
+  '#DB2777',
+  '#DC2626',
+  '#0891B2',
 ];
 
 export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) => {
   const store = useOfflineStore();
   const profile = store.getUserProfile();
   const deviceId = store.getDeviceId();
+  const userId = store.getUserId();
+  const authStatus = store.getAuthStatus();
   const { fares: myFares, statuses: myStatuses } = store.getMyReports();
+  const myBoardings = store.getMyBoardingConfirmations();
   const outboxItems = store.getOutboxItems();
   const pendingCount = store.getPendingWritesCount();
   const isOnline = store.isEffectivelyOnline();
   const isSimulated = store.isOfflineSimulated();
+  const syncStatus = store.getSyncStatus();
+  const displayCurrency = store.getDisplayCurrency();
+  const [globalSyncBanner, setGlobalSyncBanner] = useState<string | null>(null);
 
   // Profile Form States
   const [nameInput, setNameInput] = useState(profile.name || '');
@@ -79,10 +83,11 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
   const [copiedId, setCopiedId] = useState(false);
   const [activeSubTab, setActiveSubTab] = useState<'my-reports' | 'outbox'>('my-reports');
   const [isAddReportOpen, setIsAddReportOpen] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const handleCopyDeviceId = () => {
     if (navigator.clipboard) {
-      navigator.clipboard.writeText(deviceId);
+      navigator.clipboard.writeText(`User ID: ${userId} | Device ID: ${deviceId}`);
       setCopiedId(true);
       setTimeout(() => setCopiedId(false), 2000);
     }
@@ -122,11 +127,21 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
     setIsEditingProfile(false);
   };
 
+  const handleGoogleSignIn = async () => {
+    const res = await signInWithGoogle();
+    if (res.error) {
+      setGlobalSyncBanner(res.error);
+    } else if (res.user) {
+      await store.globalSyncNow();
+      setGlobalSyncBanner(`Cloud account linked: ${res.user.displayName || res.user.email} (Owner RLS Active)`);
+    }
+    setTimeout(() => setGlobalSyncBanner(null), 4000);
+  };
+
   return (
     <div className="space-y-5 pb-12">
       {/* SECTION 1: UNIFIED COMMUTER PROFILE & IDENTITY CARD */}
       <div className="bg-white p-4 sm:p-5 border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414]">
-        {/* Profile Card Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b-2 border-[#141414] pb-3 mb-4">
           <div className="flex items-center gap-3">
             <div 
@@ -147,17 +162,25 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
               <div className="flex items-center gap-2 text-xs font-bold text-stone-600 mt-0.5 flex-wrap">
                 <span className="text-[#F27D26] font-black">{profile.handle || '@commuter'}</span>
                 {profile.phone && (
-                  <span className="text-stone-700 font-semibold">• Tel: +{profile.phone}</span>
+                  <span className="text-stone-700 font-semibold" title="Private PII (only visible to you)">
+                    • Private Tel: {profile.phone}
+                  </span>
                 )}
-                <span className="text-stone-400">|</span>
-                <span className="font-mono text-[10px] text-stone-500">ID: {deviceId.slice(0, 10)}...</span>
+              </div>
+              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                <span className="font-mono text-[10px] text-stone-700 bg-[#F5F5F0] px-1.5 py-0.5 border border-stone-300 break-all">
+                  User ID: {userId}
+                </span>
+                <span className="font-mono text-[10px] text-stone-600 bg-[#F5F5F0] px-1.5 py-0.5 border border-stone-300 break-all">
+                  Device ID: {deviceId}
+                </span>
                 <button
                   onClick={handleCopyDeviceId}
-                  className="text-[#141414] hover:text-[#F27D26] flex items-center gap-0.5 font-black uppercase text-[10px]"
-                  title="Copy full Device UUID"
+                  className="text-[#141414] hover:text-[#F27D26] flex items-center gap-0.5 font-black uppercase text-[10px] cursor-pointer"
+                  title="Copy User ID & Device ID"
                 >
                   <Copy className="w-3 h-3" />
-                  <span>{copiedId ? 'Copied' : 'Copy'}</span>
+                  <span>{copiedId ? 'Copied' : 'Copy IDs'}</span>
                 </button>
               </div>
             </div>
@@ -184,9 +207,9 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
 
         {/* Success Alert */}
         {profileSaved && (
-          <div className="mb-4 p-3 bg-emerald-50 border-2 border-emerald-600 text-xs font-bold text-emerald-950 flex items-center gap-2 animate-in fade-in">
+          <div className="mb-4 p-3 bg-emerald-50 border-2 border-emerald-600 text-xs font-bold text-emerald-950 flex items-center gap-2">
             <Check className="w-4 h-4 text-emerald-600" />
-            <span>Profile successfully updated! Your name, username, and number are saved locally.</span>
+            <span>Profile saved locally in SQLite! Phone number is protected in owner-only private storage.</span>
           </div>
         )}
 
@@ -208,7 +231,6 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {/* 1. Full Name */}
               <div>
                 <label className="block text-[11px] font-black uppercase text-[#141414] mb-1">
                   Full Name (Optional)
@@ -222,7 +244,6 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                 />
               </div>
 
-              {/* 2. Username */}
               <div>
                 <label className="block text-[11px] font-black uppercase text-[#141414] mb-1">
                   Username *
@@ -237,10 +258,9 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                 />
               </div>
 
-              {/* 3. Social Handle */}
               <div>
                 <label className="block text-[11px] font-black uppercase text-[#141414] mb-1">
-                  Handle
+                  Handle (@taggable by commuters)
                 </label>
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 font-bold text-xs">@</span>
@@ -254,10 +274,9 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                 </div>
               </div>
 
-              {/* 4. Phone Number */}
               <div>
                 <label className="block text-[11px] font-black uppercase text-[#141414] mb-1">
-                  Phone Number (e.g. EcoCash / OneMoney)
+                  Private Phone Number (Owner-Only RLS)
                 </label>
                 <div className="relative">
                   <Phone className="w-3.5 h-3.5 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -265,14 +284,13 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                     type="tel"
                     value={phoneInput}
                     onChange={(e) => setPhoneInput(e.target.value)}
-                    placeholder="0771 234 567"
+                    placeholder="+263 771 234 567"
                     className="w-full pl-8 pr-3 py-2 text-xs font-bold border-2 border-[#141414] bg-white focus:outline-none shadow-[1px_1px_0px_0px_#141414]"
                   />
                 </div>
               </div>
             </div>
 
-            {/* Commuter Badge Selection */}
             <div>
               <label className="block text-[11px] font-black uppercase text-[#141414] mb-1">
                 Commuter Community Badge
@@ -288,7 +306,6 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
               </select>
             </div>
 
-            {/* Avatar Theme Color */}
             <div>
               <label className="block text-[11px] font-black uppercase text-[#141414] mb-1.5">
                 Avatar Profile Color
@@ -310,7 +327,6 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
               </div>
             </div>
 
-            {/* Form Actions */}
             <div className="flex items-center gap-2 pt-2 border-t border-stone-300">
               <button
                 type="submit"
@@ -329,42 +345,77 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
             </div>
           </form>
         ) : (
-          /* Profile Summary Strip */
           <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414] flex flex-col sm:flex-row sm:items-center justify-between text-xs gap-2">
             <div>
-              <span className="font-black text-[#141414] uppercase">Title: Mufambidzani / Commuter Scout</span>
+              <span className="font-black text-[#141414] uppercase">Owner Role-Level Security (RLS) Active</span>
               <p className="text-[11px] font-medium text-stone-600 mt-0.5">
-                Accuracy weighted by upvotes and recency. Your profile is saved offline in local storage.
+                Only you can edit or delete your submissions &amp; phone number. Others have read-only access.
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[#141414] font-black text-xs uppercase bg-white px-2 py-1 border border-[#141414] whitespace-nowrap">
-                {profile.reports_count} Reports Submitted
+                {profile.reports_count} Contributions
               </span>
+              {!authStatus.uid || authStatus.isAnonymous ? (
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  className="px-2.5 py-1 bg-[#141414] hover:bg-[#F27D26] text-white text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition"
+                >
+                  <LogIn className="w-3 h-3 text-[#F27D26]" />
+                  <span>{authStatus.uid ? 'Link Google Account' : 'Sign In with Google'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => signOutCloud()}
+                  className="px-2.5 py-1 bg-white hover:bg-red-50 text-red-700 text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition"
+                >
+                  <LogOut className="w-3 h-3" />
+                  <span>Google Linked ({authStatus.email?.split('@')[0]})</span>
+                </button>
+              )}
             </div>
           </div>
         )}
       </div>
 
-      {/* SECTION 2: LIGHTWEIGHT PWA STANDALONE INSTALLATION (Requirement 1) */}
+      {/* SECTION 2: LIGHTWEIGHT PWA STANDALONE INSTALLATION */}
       <PWAInstallButton variant="full" />
 
-      {/* SECTION 3: OUTBOX PATTERN & OFFLINE CACHE CONTROLS */}
+      {/* SECTION 3: DUAL SQLITE <-> CLOUD SYNC ENGINE */}
       <div className="bg-white p-4 sm:p-5 border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414]">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-2.5">
             <CloudUpload className="w-6 h-6 text-[#F27D26]" />
             <div>
               <h3 className="text-sm font-black text-[#141414] uppercase tracking-wider">
-                Outbox Pattern &amp; Offline Cache Engine
+                SQLite &amp; Bidirectional Cloud Sync
               </h3>
               <p className="text-[11px] font-medium text-stone-600">
-                Zero-connectivity local database with silent background reconciliation
+                100% offline-first cold start with automatic two-way cloud reconciliation
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={async () => {
+                const res = await store.globalSyncNow();
+                setGlobalSyncBanner(
+                  res.error
+                    ? `Sync notice: ${res.error}`
+                    : `Dual Cloud Sync complete (${res.pushed} queued items pushed & cloud snapshots pulled)`
+                );
+                setTimeout(() => setGlobalSyncBanner(null), 4000);
+              }}
+              disabled={syncStatus.isSyncing}
+              className="px-3 py-1.5 bg-[#F27D26] hover:bg-[#d96615] text-white text-xs font-black uppercase tracking-wider transition flex items-center gap-1.5 border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${syncStatus.isSyncing ? 'animate-spin' : ''}`} />
+              <span>{syncStatus.isSyncing ? 'Syncing...' : 'Dual Sync Now'}</span>
+            </button>
+
             <button
               onClick={() => store.setOfflineSimulation(!isSimulated)}
               className={`px-3 py-1.5 text-xs font-black uppercase tracking-wider transition flex items-center gap-1.5 border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] cursor-pointer ${
@@ -377,21 +428,18 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
               {isSimulated ? <WifiOff className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />}
               <span>{isSimulated ? 'Simulated Offline' : 'Online Mode'}</span>
             </button>
-            
-            {pendingCount > 0 && (
-              <button
-                onClick={() => store.flushOutbox()}
-                className="px-3 py-1.5 bg-[#F27D26] hover:bg-[#d96615] text-white text-xs font-black uppercase tracking-wider transition flex items-center gap-1.5 border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] cursor-pointer"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Sync Now ({pendingCount})</span>
-              </button>
-            )}
           </div>
         </div>
 
+        {globalSyncBanner && (
+          <div className="mb-3 p-2.5 bg-emerald-50 border-2 border-[#141414] text-xs font-bold text-emerald-950 flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{globalSyncBanner}</span>
+          </div>
+        )}
+
         {/* Status Metrics Strip */}
-        <div className="grid grid-cols-3 gap-2.5 text-center text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center text-xs">
           <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414]">
             <span className="text-[10px] text-[#141414]/60 block uppercase font-black">Pending Outbox</span>
             <span className={`text-xl font-black ${pendingCount > 0 ? 'text-[#F27D26]' : 'text-[#141414]'}`}>
@@ -399,13 +447,23 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
             </span>
           </div>
           <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414]">
-            <span className="text-[10px] text-[#141414]/60 block uppercase font-black">Local Cache</span>
-            <span className="text-xl font-black text-[#141414]">Instant</span>
+            <span className="text-[10px] text-[#141414]/60 block uppercase font-black flex items-center justify-center gap-1">
+              <Database className="w-3 h-3 text-[#F27D26]" /> Local SQLite
+            </span>
+            <span className="text-base sm:text-lg font-black text-[#141414] block">
+              {syncStatus.sqliteReady ? `${syncStatus.sqliteRowCount} rows` : 'Local Mirror'}
+            </span>
           </div>
           <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414]">
-            <span className="text-[10px] text-[#141414]/60 block uppercase font-black">Connection</span>
-            <span className={`text-xl font-black ${isOnline ? 'text-[#141414]' : 'text-[#F27D26]'}`}>
-              {isOnline ? 'Live' : 'Offline'}
+            <span className="text-[10px] text-[#141414]/60 block uppercase font-black">Cloud Status</span>
+            <span className={`text-base sm:text-lg font-black ${isOnline ? 'text-emerald-700' : 'text-[#F27D26]'}`}>
+              {isOnline ? (syncStatus.cloudConnected ? 'Dual Sync Live' : 'Online') : 'Offline'}
+            </span>
+          </div>
+          <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414]">
+            <span className="text-[10px] text-[#141414]/60 block uppercase font-black">Last Synced</span>
+            <span className="text-xs sm:text-sm font-black text-[#141414] block mt-1">
+              {syncStatus.lastSyncedAt ? formatTimeAgo(syncStatus.lastSyncedAt) : 'Not synced yet'}
             </span>
           </div>
         </div>
@@ -421,7 +479,7 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
               : 'bg-white text-[#141414] hover:bg-[#F5F5F0]'
           }`}
         >
-          My Submissions ({myFares.length + myStatuses.length})
+          My Submissions ({myFares.length + myStatuses.length + myBoardings.length})
         </button>
         <button
           onClick={() => setActiveSubTab('outbox')}
@@ -440,10 +498,10 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
         </button>
       </div>
 
-      {/* Subtab 1: My Submissions */}
+      {/* Subtab 1: My Submissions (with Owner Delete control) */}
       {activeSubTab === 'my-reports' && (
         <div className="space-y-3">
-          {myFares.length === 0 && myStatuses.length === 0 ? (
+          {myFares.length === 0 && myStatuses.length === 0 && myBoardings.length === 0 ? (
             <div className="bg-white p-8 sm:p-10 text-center border-2 border-[#141414] shadow-[6px_6px_0px_0px_#141414] space-y-4">
               <div className="w-16 h-16 bg-[#F5F5F0] border-2 border-[#141414] shadow-[3px_3px_0px_0px_#F27D26] flex items-center justify-center mx-auto text-[#141414]">
                 <Clock className="w-8 h-8 text-[#F27D26]" />
@@ -478,27 +536,73 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                   <div
                     key={f.id}
                     onClick={() => onSelectRoute(f.route_id)}
-                    className="p-3.5 bg-white border-2 border-[#141414] shadow-[3px_3px_0px_0px_#141414] hover:shadow-[5px_5px_0px_0px_#F27D26] hover:-translate-x-0.5 hover:-translate-y-0.5 cursor-pointer transition flex items-center justify-between group"
+                    className="p-3.5 bg-white border-2 border-[#141414] shadow-[3px_3px_0px_0px_#141414] hover:shadow-[5px_5px_0px_0px_#F27D26] cursor-pointer transition flex items-center justify-between gap-3 group"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 bg-[#141414] text-white border-2 border-[#141414] flex items-center justify-center font-black text-xs">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 bg-[#141414] text-white border-2 border-[#141414] flex items-center justify-center font-black text-xs shrink-0">
                         <DollarSign className="w-4 h-4 text-[#F27D26]" />
                       </div>
-                      <div>
-                        <h4 className="text-sm font-black text-[#141414] group-hover:text-[#F27D26] transition uppercase">{rt?.name || f.route_name || 'Route'}</h4>
+                      <div className="min-w-0">
+                        <h4 className="text-sm font-black text-[#141414] group-hover:text-[#F27D26] transition uppercase truncate">
+                          {rt?.name || f.route_name || 'Route'}
+                        </h4>
                         <span className="text-[11px] font-bold text-stone-500">
                           {formatTimeAgo(f.reported_at)} • {f.upvotes} Confirmations • {f.transport_type || 'HiAce Kombi'}
                         </span>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <span className="text-base sm:text-lg font-black text-[#141414]">
-                        {formatCurrency(f.fare_amount, f.currency)}
-                      </span>
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <div className="text-right">
+                        <span className="text-base sm:text-lg font-black text-[#141414] block">
+                          {formatDisplayFare(f.fare_amount, f.currency, displayCurrency)}
+                        </span>
+                        {f.currency !== displayCurrency && (
+                          <span className="text-[10px] font-bold text-stone-500">
+                            orig {formatCurrency(f.fare_amount, f.currency)}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          store.deleteFareReport(f.id);
+                        }}
+                        className="p-1.5 bg-red-50 hover:bg-red-600 hover:text-white text-red-700 border border-[#141414] cursor-pointer transition"
+                        title="Delete your fare report"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
                 );
               })}
+
+              {/* My Boarding Confirmations */}
+              {myBoardings.map((b) => (
+                <div
+                  key={b.id}
+                  className="p-3.5 bg-white border-2 border-[#141414] shadow-[3px_3px_0px_0px_#141414] flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 bg-[#F27D26] text-white border-2 border-[#141414] flex items-center justify-center font-black text-xs">
+                      <MapPin className="w-4 h-4 text-white" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm font-black text-[#141414] uppercase">{b.rankName}</h4>
+                        <span className="text-[10px] px-2 py-0.5 font-black uppercase bg-emerald-100 text-emerald-900 border border-[#141414]">
+                          {b.statement}
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-bold text-stone-500">
+                        {b.city} • {formatTimeAgo(b.createdAt)}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-black uppercase text-stone-500">Verified Check-in</span>
+                </div>
+              ))}
 
               {/* My Statuses */}
               {myStatuses.map((s) => {
@@ -508,7 +612,7 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                   <div
                     key={s.id}
                     onClick={() => onSelectRoute(s.route_id)}
-                    className="p-3.5 bg-white border-2 border-[#141414] shadow-[3px_3px_0px_0px_#141414] hover:shadow-[5px_5px_0px_0px_#F27D26] hover:-translate-x-0.5 hover:-translate-y-0.5 cursor-pointer transition flex items-center justify-between group"
+                    className="p-3.5 bg-white border-2 border-[#141414] shadow-[3px_3px_0px_0px_#141414] hover:shadow-[5px_5px_0px_0px_#F27D26] cursor-pointer transition flex items-center justify-between group"
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 bg-[#141414] text-white border-2 border-[#141414] flex items-center justify-center font-black text-xs">
@@ -530,7 +634,20 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                         )}
                       </div>
                     </div>
-                    <ChevronRight className="w-4 h-4 text-[#141414] group-hover:translate-x-0.5 transition" />
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          store.deleteStatusReport(s.id);
+                        }}
+                        className="p-1.5 bg-red-50 hover:bg-red-600 hover:text-white text-red-700 border border-[#141414] cursor-pointer transition"
+                        title="Delete your status report"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                      <ChevronRight className="w-4 h-4 text-[#141414] group-hover:translate-x-0.5 transition" />
+                    </div>
                   </div>
                 );
               })}
@@ -550,7 +667,7 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
               <div className="space-y-1 max-w-sm mx-auto">
                 <h4 className="text-base sm:text-lg font-black text-[#141414] uppercase">Outbox is Clean</h4>
                 <p className="text-xs sm:text-sm font-medium text-stone-600">
-                  No pending writes waiting to be synced. Everything recorded on this device is fully up to date!
+                  No pending writes waiting to be synced. Everything recorded on this device is stored in local SQLite &amp; synced!
                 </p>
               </div>
               <button
@@ -570,7 +687,7 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-black text-[#141414] uppercase text-[10px] px-2 py-0.5 bg-[#F5F5F0] border-2 border-[#141414]">
-                      {item.type.replace('_', ' ')}
+                      {item.type.replace(/_/g, ' ')}
                     </span>
                     <span className="text-stone-500 font-bold text-[11px]">
                       {formatTimeAgo(item.created_at)}
@@ -609,19 +726,36 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
         </div>
       )}
 
-      {/* Dev Reset seed action */}
+      {/* Dev Reset seed action (inline 2-step confirmation) */}
       <div className="pt-4 text-center">
-        <button
-          onClick={() => {
-            if (window.confirm('Reset app data to fresh clean production state?')) {
-              store.resetToSeed();
-            }
-          }}
-          className="text-xs font-black uppercase tracking-wider text-[#141414]/60 hover:text-[#F27D26] flex items-center justify-center gap-1 mx-auto transition cursor-pointer"
-        >
-          <RotateCcw className="w-3 h-3" />
-          <span>Reset App to Fresh Production State</span>
-        </button>
+        {!confirmReset ? (
+          <button
+            onClick={() => setConfirmReset(true)}
+            className="text-xs font-black uppercase tracking-wider text-[#141414]/60 hover:text-[#F27D26] flex items-center justify-center gap-1 mx-auto transition cursor-pointer"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Reset Local Cache to Fresh Production State</span>
+          </button>
+        ) : (
+          <div className="inline-flex items-center gap-2 bg-white border-2 border-[#141414] px-3 py-1.5">
+            <span className="text-[11px] font-black uppercase">Confirm local reset?</span>
+            <button
+              onClick={() => {
+                store.resetToSeed();
+                setConfirmReset(false);
+              }}
+              className="px-2 py-0.5 bg-red-600 text-white text-[10px] font-black uppercase cursor-pointer"
+            >
+              Yes, Reset
+            </button>
+            <button
+              onClick={() => setConfirmReset(false)}
+              className="px-2 py-0.5 bg-[#F5F5F0] text-[#141414] text-[10px] font-black uppercase border border-[#141414] cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Add Report Modal */}

@@ -27,10 +27,14 @@ interface UserLocationBarProps {
 export const UserLocationBar: React.FC<UserLocationBarProps> = ({ onLocationChange }) => {
   const store = useOfflineStore();
   const currentLocation = store.getUserLocation();
+  const nearestRank = store.getNearestRankToUser(currentLocation);
+  const nearestBoardingCount = nearestRank ? store.getBoardingCountForRank(nearestRank.id) : 0;
+  const alreadyBoardedNearest = nearestRank ? store.hasUserBoardedRankRecently(nearestRank.id) : false;
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'acquiring' | 'success' | 'error'>('idle');
   const [gpsMessage, setGpsMessage] = useState<string>('');
+  const [boardingFeedback, setBoardingFeedback] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
   const [selectedCityFilter, setSelectedCityFilter] = useState<string>('All');
   
@@ -39,6 +43,20 @@ export const UserLocationBar: React.FC<UserLocationBarProps> = ({ onLocationChan
   const [customName, setCustomName] = useState('');
   const [customLat, setCustomLat] = useState(currentLocation.lat.toString());
   const [customLng, setCustomLng] = useState(currentLocation.lng.toString());
+  const [customError, setCustomError] = useState<string | null>(null);
+
+  const handleQuickBoardedHere = () => {
+    const res = store.confirmBoardingAtRank(nearestRank?.id);
+    if (res.success && res.rank) {
+      const stmt = store.getBoardingStatementForRank(res.rank.id);
+      setBoardingFeedback(
+        res.alreadyBoarded
+          ? `Already checked in at ${res.rank.name} • ${stmt}`
+          : `Confirmed: "I boarded here" at ${res.rank.name} • ${stmt}`
+      );
+      setTimeout(() => setBoardingFeedback(null), 4000);
+    }
+  };
 
   // Handle GPS Auto-Detection (Optimized for low network / low-end phone GPS)
   const handleDetectGPS = () => {
@@ -116,11 +134,12 @@ export const UserLocationBar: React.FC<UserLocationBarProps> = ({ onLocationChan
 
   const handleSaveCustomCoords = (e: React.FormEvent) => {
     e.preventDefault();
+    setCustomError(null);
     const latNum = parseFloat(customLat);
     const lngNum = parseFloat(customLng);
 
     if (isNaN(latNum) || isNaN(lngNum)) {
-      alert('Please enter valid decimal coordinates (e.g. -17.8315, 31.0450)');
+      setCustomError('Please enter valid decimal coordinates (e.g. -17.8315, 31.0450)');
       return;
     }
 
@@ -171,11 +190,38 @@ export const UserLocationBar: React.FC<UserLocationBarProps> = ({ onLocationChan
                 ({formatCoordinates(currentLocation.lat, currentLocation.lng)})
               </span>
             </div>
+            {nearestRank && (
+              <div className="text-[10px] font-bold text-stone-600 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                <span>Nearest Rank: <strong className="text-[#141414] uppercase">{nearestRank.name}</strong></span>
+                <span className="bg-[#F5F5F0] border border-[#141414] px-1.5 py-0.2 text-[9px] font-black text-[#141414]">
+                  {nearestBoardingCount === 1
+                    ? '1 commuter boarded here'
+                    : `${nearestBoardingCount} commuters boarded here`}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Location Action Buttons */}
-        <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-shrink-0">
+        {/* Location Action Buttons + One-Tap "I boarded here" Preset */}
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap sm:flex-nowrap flex-shrink-0">
+          {nearestRank && (
+            <button
+              id="quick-boarded-here-btn"
+              type="button"
+              onClick={handleQuickBoardedHere}
+              className={`px-3 py-1.5 text-xs font-black uppercase tracking-wider border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                alreadyBoardedNearest
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-[#F27D26] hover:bg-[#141414] text-white'
+              }`}
+              title={`Tap to confirm "I boarded here" at ${nearestRank.name}`}
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>{alreadyBoardedNearest ? 'Boarded Here ✓' : 'I boarded here'}</span>
+            </button>
+          )}
+
           <button
             id="detect-gps-btn"
             onClick={handleDetectGPS}
@@ -197,6 +243,14 @@ export const UserLocationBar: React.FC<UserLocationBarProps> = ({ onLocationChan
           </button>
         </div>
       </div>
+
+      {/* Boarding Confirmation Toast */}
+      {boardingFeedback && (
+        <div className="p-2.5 text-xs font-black uppercase tracking-wider border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] bg-emerald-100 text-emerald-950 flex items-center gap-2">
+          <Check className="w-4 h-4 text-emerald-700 flex-shrink-0" />
+          <span>{boardingFeedback}</span>
+        </div>
+      )}
 
       {/* GPS Status Toast if active */}
       {gpsMessage && (
@@ -415,6 +469,12 @@ export const UserLocationBar: React.FC<UserLocationBarProps> = ({ onLocationChan
                 <p className="text-[10px] text-stone-500 font-medium italic">
                   Tip: Negative latitude is South (Zimbabwe is ~ -17° to -22°S, 25° to 33°E).
                 </p>
+
+                {customError && (
+                  <p className="text-xs font-black text-rose-700 bg-rose-100 border border-[#141414] p-2">
+                    {customError}
+                  </p>
+                )}
 
                 <button
                   type="submit"

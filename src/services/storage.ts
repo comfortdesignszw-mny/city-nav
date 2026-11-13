@@ -6,7 +6,8 @@ import {
   UserProfile, 
   PendingWrite, 
   ActiveRouteSummary, 
-  Currency, 
+  Currency,
+  DisplayCurrency,
   StatusType,
   RouteCategory,
   BusOperator,
@@ -17,7 +18,17 @@ import {
   TransporterVehicleType,
   CommuterSocialInteraction,
   AmenityFeedback,
-  AbuseCategory
+  AbuseCategory,
+  BoardingConfirmation,
+  LocationAnchor,
+  SyncStatusInfo,
+  SocialTargetType,
+  SocialPostType,
+  SocialReply,
+  SocialReactionRecord,
+  ReactionTargetType,
+  CommuterNotification,
+  NotificationType,
 } from '../types';
 import { 
   SEED_RANKS, 
@@ -34,12 +45,26 @@ import {
 } from '../data/intercityData';
 import { SEED_TRANSPORTERS } from '../data/transportersData';
 import { SEED_SOCIAL_INTERACTIONS } from '../data/socialInteractionsData';
-import { DEFAULT_USER_LOCATION } from '../utils/geoUtils';
+import { calculateDistanceKm, DEFAULT_USER_LOCATION } from '../utils/geoUtils';
+import { sqliteDb } from './sqliteDb';
+import {
+  auth,
+  ensureCloudAuth,
+  getCurrentAuthStatus,
+  subscribeAuthState,
+} from './firebase';
+import {
+  CloudSnapshotData,
+  pullAllFromCloud,
+  pushPendingWriteToCloud,
+  subscribeToCloudCollections,
+} from './cloudSync';
 
 const STORAGE_KEYS = {
   DEVICE_ID: 'fambai_device_id',
   USER_PROFILE: 'fambai_user_profile',
   USER_LOCATION: 'fambai_user_location',
+  DISPLAY_CURRENCY: 'fambai_display_currency',
   ROUTES: 'fambai_routes',
   RANKS: 'fambai_ranks',
   FARE_REPORTS: 'fambai_fare_reports',
@@ -52,10 +77,16 @@ const STORAGE_KEYS = {
   INTERCITY_REPORTS: 'fambai_intercity_reports',
   TRANSPORTERS: 'fambai_transporters',
   SOCIAL_INTERACTIONS: 'fambai_social_interactions',
+  SOCIAL_REPLIES: 'fambai_social_replies',
+  SOCIAL_REACTIONS: 'fambai_social_reactions',
+  NOTIFICATIONS: 'fambai_notifications',
+  BOARDING_CONFIRMATIONS: 'fambai_boarding_confirmations',
+  COMMUTERS_DIRECTORY: 'fambai_commuters_directory',
+  LOCATION_ANCHORS: 'fambai_location_anchors',
+  LAST_SYNCED_AT: 'fambai_last_synced_at',
   PRODUCTION_CLEAN: 'fambai_production_clean_v1',
 };
 
-// Generate UUID for anonymous device identification
 export function getOrCreateDeviceId(): string {
   try {
     let id = localStorage.getItem(STORAGE_KEYS.DEVICE_ID);
@@ -69,14 +100,12 @@ export function getOrCreateDeviceId(): string {
   }
 }
 
-// Storage helper with fallback
 function safeGet<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
     return JSON.parse(raw) as T;
-  } catch (e) {
-    console.warn(`Error reading from localStorage key: ${key}`, e);
+  } catch {
     return fallback;
   }
 }
@@ -84,14 +113,15 @@ function safeGet<T>(key: string, fallback: T): T {
 function safeSet<T>(key: string, data: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(data));
-  } catch (e) {
-    console.warn(`Error writing to localStorage key: ${key}`, e);
+  } catch {
+    // Ignore quota errors
   }
 }
 
 class FambaiOfflineStore {
   private deviceId: string;
   private userProfile: UserProfile;
+  private displayCurrency: DisplayCurrency = 'USD';
   private routes: RouteItem[] = [];
   private ranks: Rank[] = [];
   private fareReports: FareReport[] = [];
@@ -101,18 +131,33 @@ class FambaiOfflineStore {
   private intercityReports: IntercityReport[] = [];
   private transporters: TransporterProfile[] = [];
   private socialInteractions: CommuterSocialInteraction[] = [];
+  private socialReplies: SocialReply[] = [];
+  private socialReactions: SocialReactionRecord[] = [];
+  private notifications: CommuterNotification[] = [];
+  private boardingConfirmations: BoardingConfirmation[] = [];
+  private commutersDirectory: UserProfile[] = [];
+  private locationAnchors: LocationAnchor[] = [];
   private outbox: PendingWrite[] = [];
   private userLocation: UserLocation;
   private simulatedOffline: boolean = false;
   private isSyncing: boolean = false;
+  private lastSyncedAt: number | null = null;
+  private lastSyncError: string | null = null;
+  private cloudConnected: boolean = false;
+  private sqliteReady: boolean = false;
+  private currentAuthUid: string | null = null;
   private listeners: Set<() => void> = new Set();
-  private syncTimer: any = null;
+  private syncTimer: ReturnType<typeof setInterval> | null = null;
+  private cloudUnsubscribe: (() => void) | null = null;
+  private activeSubscribedUid: string | null = null;
 
   constructor() {
     this.deviceId = getOrCreateDeviceId();
     this.simulatedOffline = safeGet<boolean>(STORAGE_KEYS.OFFLINE_SIMULATION, false);
+    this.displayCurrency = safeGet<DisplayCurrency>(STORAGE_KEYS.DISPLAY_CURRENCY, 'USD');
+    this.lastSyncedAt = safeGet<number | null>(STORAGE_KEYS.LAST_SYNCED_AT, null);
 
-    // Production Reset Check: Ensure stale demo data is flushed for production while preserving profile
+    // Production Reset Check
     const hasCleanedForProduction = safeGet<boolean>(STORAGE_KEYS.PRODUCTION_CLEAN, false);
     if (!hasCleanedForProduction) {
       localStorage.removeItem(STORAGE_KEYS.SOCIAL_INTERACTIONS);
@@ -124,30 +169,34 @@ class FambaiOfflineStore {
       localStorage.removeItem(STORAGE_KEYS.LAST_REPORTS_BY_ROUTE);
       safeSet(STORAGE_KEYS.PRODUCTION_CLEAN, true);
     }
-    
-    // User Location hydration (defaults to Copacabana, Harare if not set)
+
     const cachedLoc = safeGet<UserLocation | null>(STORAGE_KEYS.USER_LOCATION, null);
     this.userLocation = cachedLoc || DEFAULT_USER_LOCATION;
 
-    // 1. Instant Cache Hydration from Local SQLite/LocalStorage representation
+    // 1. Instant Cold-Start Offline Cache Hydration (zero internet required)
     this.initFromLocalCache();
 
-    // 2. Setup user profile with friendly default username & handle
+    // 2. Setup user profile with auto-assigned User ID + Device ID
     const existingProfile = safeGet<UserProfile | null>(STORAGE_KEYS.USER_PROFILE, null);
     const defaultSuffix = this.deviceId.slice(-4).toUpperCase();
+    const localAssignedUserId = `usr-${this.deviceId}`;
     if (existingProfile) {
       this.userProfile = {
         ...existingProfile,
+        device_id: this.deviceId,
+        userId: existingProfile.userId || existingProfile.ownerUid || localAssignedUserId,
         username: existingProfile.username || `Commuter_${defaultSuffix}`,
         handle: existingProfile.handle || `@commuter_${defaultSuffix.toLowerCase()}`,
         avatarColor: existingProfile.avatarColor || '#F27D26',
         commuterBadge: existingProfile.commuterBadge || 'Daily Commuter',
         role: existingProfile.role || 'commuter',
+        updatedAt: existingProfile.updatedAt || Date.now(),
       };
       safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
     } else {
       this.userProfile = {
         device_id: this.deviceId,
+        userId: localAssignedUserId,
         username: `Commuter_${defaultSuffix}`,
         handle: `@commuter_${defaultSuffix.toLowerCase()}`,
         avatarColor: '#F27D26',
@@ -156,23 +205,176 @@ class FambaiOfflineStore {
         reputation_score: 100,
         reports_count: 0,
         createdAt: Date.now(),
+        updatedAt: Date.now(),
       };
       safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
     }
 
-    // 3. Start background sync loop
-    this.startBackgroundSync();
+    this.ensureLocalUserInDirectory();
 
-    // 4. Listen to browser online events
+    // 3. Initialize Local SQLite + Firebase Auth + Bidirectional Cloud Sync
+    this.initSqliteAndCloud();
+
+    // 4. Listen to browser online/offline events
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => {
         this.notifyChange();
-        this.flushOutbox();
+        this.onNetworkReconnected();
       });
       window.addEventListener('offline', () => {
+        this.cloudConnected = false;
+        this.detachCloudListeners();
         this.notifyChange();
       });
     }
+  }
+
+  private async onNetworkReconnected(): Promise<void> {
+    if (!this.isEffectivelyOnline()) return;
+    await ensureCloudAuth();
+    this.attachCloudListeners();
+    await this.globalSyncNow();
+  }
+
+  private async initSqliteAndCloud(): Promise<void> {
+    const ok = await sqliteDb.init();
+    this.sqliteReady = ok;
+
+    if (ok) {
+      this.hydrateFromSqliteIfNewer();
+      this.mirrorAllToSqlite();
+    }
+
+    this.notifyChange();
+    this.startBackgroundSync();
+
+    // Subscribe to Firebase Auth changes for auto-assigned cloud UID & dual-sync
+    subscribeAuthState(async (user) => {
+      const uid = user?.uid || null;
+      this.currentAuthUid = uid;
+      if (uid) {
+        let changed = false;
+        if (this.userProfile.ownerUid !== uid || !this.userProfile.userId || this.userProfile.userId.startsWith('usr-zw-')) {
+          this.userProfile = {
+            ...this.userProfile,
+            ownerUid: uid,
+            userId: uid,
+            updatedAt: Date.now(),
+          };
+          safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+          this.ensureLocalUserInDirectory();
+          changed = true;
+        }
+        if (changed) {
+          this.syncProfileToOutbox(false);
+        }
+        if (this.isEffectivelyOnline()) {
+          // Re-attach cloud listeners with authenticated UID (for notifications)
+          if (this.activeSubscribedUid !== uid) {
+            this.detachCloudListeners();
+          }
+          this.attachCloudListeners();
+          await this.globalSyncNow();
+        }
+      }
+      this.notifyChange();
+    });
+
+    if (this.isEffectivelyOnline()) {
+      await ensureCloudAuth();
+      this.attachCloudListeners();
+      this.syncProfileToOutbox(false);
+      await this.globalSyncNow();
+    }
+  }
+
+  private hydrateFromSqliteIfNewer(): void {
+    if (!sqliteDb.isReady()) return;
+
+    const sqlPriv = sqliteDb.getAll<{ device_id: string; phone?: string; ownerUid?: string; updatedAt?: number }>('private_profile');
+    const myPriv = sqlPriv.find((p) => p.device_id === this.deviceId);
+    if (myPriv?.phone && !this.userProfile.phone) {
+      this.userProfile.phone = myPriv.phone;
+      safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    }
+
+    const sqlFares = sqliteDb.getAll<FareReport>('fare_reports');
+    if (sqlFares.length > 0) this.mergeFareReports(sqlFares);
+
+    const sqlStatuses = sqliteDb.getAll<StatusReport>('status_reports');
+    if (sqlStatuses.length > 0) this.mergeStatusReports(sqlStatuses);
+
+    const sqlRoutes = sqliteDb.getAll<RouteItem>('routes');
+    if (sqlRoutes.length > 0) this.mergeRoutes(sqlRoutes);
+
+    const sqlIc = sqliteDb.getAll<IntercityReport>('intercity_reports');
+    if (sqlIc.length > 0) this.mergeIntercityReports(sqlIc);
+
+    const sqlTrans = sqliteDb.getAll<TransporterProfile>('transporters');
+    if (sqlTrans.length > 0) this.mergeTransporters(sqlTrans);
+
+    const sqlSocial = sqliteDb.getAll<CommuterSocialInteraction>('social_interactions');
+    if (sqlSocial.length > 0) this.mergeSocialInteractions(sqlSocial);
+
+    const sqlReplies = sqliteDb.getAll<SocialReply>('social_replies');
+    if (sqlReplies.length > 0) this.mergeSocialReplies(sqlReplies);
+
+    const sqlReactions = sqliteDb.getAll<SocialReactionRecord>('social_reactions');
+    if (sqlReactions.length > 0) this.mergeSocialReactions(sqlReactions);
+
+    const sqlNotifs = sqliteDb.getAll<CommuterNotification>('notifications');
+    if (sqlNotifs.length > 0) this.mergeNotifications(sqlNotifs);
+
+    const sqlBoardings = sqliteDb.getAll<BoardingConfirmation>('boarding_confirmations');
+    if (sqlBoardings.length > 0) this.mergeBoardingConfirmations(sqlBoardings);
+
+    const sqlCommuters = sqliteDb.getAll<UserProfile>('commuters');
+    if (sqlCommuters.length > 0) this.mergeCommuters(sqlCommuters);
+
+    const sqlAnchors = sqliteDb.getAll<LocationAnchor>('location_anchors');
+    if (sqlAnchors.length > 0) this.mergeLocationAnchors(sqlAnchors);
+
+    const sqlOutbox = sqliteDb.getAll<PendingWrite>('outbox_pending');
+    if (sqlOutbox.length > 0) {
+      const outboxMap = new Map<string, PendingWrite>();
+      this.outbox.forEach((w) => outboxMap.set(w.id, w));
+      sqlOutbox.forEach((w) => {
+        if (!outboxMap.has(w.id)) outboxMap.set(w.id, w);
+      });
+      this.outbox = Array.from(outboxMap.values()).sort((a, b) => b.created_at - a.created_at);
+      safeSet(STORAGE_KEYS.OUTBOX_PENDING, this.outbox);
+    }
+  }
+
+  private mirrorAllToSqlite(): void {
+    if (!sqliteDb.isReady()) return;
+    sqliteDb.replaceTable('commuters', this.commutersDirectory.map((c) => this.stripPhoneForPublic(c)));
+    if (this.userProfile.phone !== undefined) {
+      sqliteDb.upsertRecord('private_profile', this.deviceId, {
+        device_id: this.deviceId,
+        ownerUid: this.userProfile.ownerUid,
+        phone: this.userProfile.phone,
+        updatedAt: this.userProfile.updatedAt || Date.now(),
+      });
+    }
+    sqliteDb.replaceTable('routes', this.routes);
+    sqliteDb.replaceTable('fare_reports', this.fareReports);
+    sqliteDb.replaceTable('status_reports', this.statusReports);
+    sqliteDb.replaceTable('intercity_reports', this.intercityReports);
+    sqliteDb.replaceTable('transporters', this.transporters);
+    sqliteDb.replaceTable('social_interactions', this.socialInteractions);
+    sqliteDb.replaceTable('social_replies', this.socialReplies);
+    sqliteDb.replaceTable('social_reactions', this.socialReactions);
+    sqliteDb.replaceTable('notifications', this.notifications);
+    sqliteDb.replaceTable('boarding_confirmations', this.boardingConfirmations);
+    sqliteDb.replaceTable('location_anchors', this.locationAnchors);
+    sqliteDb.replaceTable('outbox_pending', this.outbox);
+  }
+
+  private stripPhoneForPublic(p: UserProfile): UserProfile {
+    const copy = { ...p };
+    delete copy.phone;
+    return copy;
   }
 
   private initFromLocalCache() {
@@ -183,9 +385,16 @@ class FambaiOfflineStore {
     const cachedOperators = safeGet<BusOperator[]>(STORAGE_KEYS.BUS_OPERATORS, []);
     const cachedIntercityRoutes = safeGet<IntercityRoute[]>(STORAGE_KEYS.INTERCITY_ROUTES, []);
     const cachedIntercityReports = safeGet<IntercityReport[]>(STORAGE_KEYS.INTERCITY_REPORTS, []);
+    const cachedTransporters = safeGet<TransporterProfile[]>(STORAGE_KEYS.TRANSPORTERS, []);
+    const cachedSocial = safeGet<CommuterSocialInteraction[]>(STORAGE_KEYS.SOCIAL_INTERACTIONS, []);
+    const cachedReplies = safeGet<SocialReply[]>(STORAGE_KEYS.SOCIAL_REPLIES, []);
+    const cachedReactions = safeGet<SocialReactionRecord[]>(STORAGE_KEYS.SOCIAL_REACTIONS, []);
+    const cachedNotifications = safeGet<CommuterNotification[]>(STORAGE_KEYS.NOTIFICATIONS, []);
+    const cachedBoardings = safeGet<BoardingConfirmation[]>(STORAGE_KEYS.BOARDING_CONFIRMATIONS, []);
+    const cachedCommuters = safeGet<UserProfile[]>(STORAGE_KEYS.COMMUTERS_DIRECTORY, []);
+    const cachedAnchors = safeGet<LocationAnchor[]>(STORAGE_KEYS.LOCATION_ANCHORS, []);
     const cachedOutbox = safeGet<PendingWrite[]>(STORAGE_KEYS.OUTBOX_PENDING, []);
 
-    // Merge seeded routes with any local user-added routes
     const routeMap = new Map<string, RouteItem>();
     SEED_ROUTES.forEach((r) => routeMap.set(r.id, r));
     cachedRoutes.forEach((r) => {
@@ -195,50 +404,42 @@ class FambaiOfflineStore {
     this.routes = Array.from(routeMap.values());
     safeSet(STORAGE_KEYS.ROUTES, this.routes);
 
-    // Merge seeded ranks with local ranks
     const rankMap = new Map<string, Rank>();
     SEED_RANKS.forEach((rnk) => rankMap.set(rnk.id, rnk));
     cachedRanks.forEach((rnk) => rankMap.set(rnk.id, rnk));
     this.ranks = Array.from(rankMap.values());
     safeSet(STORAGE_KEYS.RANKS, this.ranks);
 
-    // Merge fares
     const fareMap = new Map<string, FareReport>();
     SEED_FARE_REPORTS.forEach((f) => fareMap.set(f.id, f));
     cachedFares.forEach((f) => fareMap.set(f.id, f));
     this.fareReports = Array.from(fareMap.values());
     safeSet(STORAGE_KEYS.FARE_REPORTS, this.fareReports);
 
-    // Merge statuses
     const statusMap = new Map<string, StatusReport>();
     SEED_STATUS_REPORTS.forEach((s) => statusMap.set(s.id, s));
     cachedStatuses.forEach((s) => statusMap.set(s.id, s));
     this.statusReports = Array.from(statusMap.values());
     safeSet(STORAGE_KEYS.STATUS_REPORTS, this.statusReports);
 
-    // Merge bus operators
     const opMap = new Map<string, BusOperator>();
     BUS_OPERATORS.forEach((op) => opMap.set(op.id, op));
     cachedOperators.forEach((op) => opMap.set(op.id, op));
     this.busOperators = Array.from(opMap.values());
     safeSet(STORAGE_KEYS.BUS_OPERATORS, this.busOperators);
 
-    // Merge intercity routes
     const icRouteMap = new Map<string, IntercityRoute>();
     INTERCITY_ROUTES.forEach((r) => icRouteMap.set(r.id, r));
     cachedIntercityRoutes.forEach((r) => icRouteMap.set(r.id, r));
     this.intercityRoutes = Array.from(icRouteMap.values());
     safeSet(STORAGE_KEYS.INTERCITY_ROUTES, this.intercityRoutes);
 
-    // Merge intercity reports
     const icRepMap = new Map<string, IntercityReport>();
     SEED_INTERCITY_REPORTS.forEach((rep) => icRepMap.set(rep.id, rep));
     cachedIntercityReports.forEach((rep) => icRepMap.set(rep.id, rep));
     this.intercityReports = Array.from(icRepMap.values());
     safeSet(STORAGE_KEYS.INTERCITY_REPORTS, this.intercityReports);
 
-    // Merge transporters
-    const cachedTransporters = safeGet<TransporterProfile[]>(STORAGE_KEYS.TRANSPORTERS, []);
     const transMap = new Map<string, TransporterProfile>();
     SEED_TRANSPORTERS.forEach((t) => transMap.set(t.id, t));
     cachedTransporters.forEach((t) => {
@@ -248,8 +449,6 @@ class FambaiOfflineStore {
     this.transporters = Array.from(transMap.values());
     safeSet(STORAGE_KEYS.TRANSPORTERS, this.transporters);
 
-    // Merge social interactions
-    const cachedSocial = safeGet<CommuterSocialInteraction[]>(STORAGE_KEYS.SOCIAL_INTERACTIONS, []);
     const socialMap = new Map<string, CommuterSocialInteraction>();
     SEED_SOCIAL_INTERACTIONS.forEach((s) => socialMap.set(s.id, s));
     cachedSocial.forEach((s) => {
@@ -259,9 +458,335 @@ class FambaiOfflineStore {
     this.socialInteractions = Array.from(socialMap.values()).sort((a, b) => b.createdAt - a.createdAt);
     safeSet(STORAGE_KEYS.SOCIAL_INTERACTIONS, this.socialInteractions);
 
+    this.socialReplies = cachedReplies.sort((a, b) => a.createdAt - b.createdAt);
+    this.socialReactions = cachedReactions;
+    this.notifications = cachedNotifications.sort((a, b) => b.createdAt - a.createdAt);
+    this.boardingConfirmations = cachedBoardings.sort((a, b) => b.createdAt - a.createdAt);
+    this.commutersDirectory = cachedCommuters;
+    this.locationAnchors = cachedAnchors;
     this.outbox = cachedOutbox;
   }
 
+  private ensureLocalUserInDirectory(): void {
+    const publicProfile = this.stripPhoneForPublic(this.userProfile);
+    const idx = this.commutersDirectory.findIndex((c) => c.device_id === this.deviceId);
+    if (idx >= 0) {
+      this.commutersDirectory[idx] = { ...this.commutersDirectory[idx], ...publicProfile };
+    } else {
+      this.commutersDirectory = [publicProfile, ...this.commutersDirectory];
+    }
+    safeSet(STORAGE_KEYS.COMMUTERS_DIRECTORY, this.commutersDirectory);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('commuters', this.userProfile.device_id, publicProfile);
+    }
+  }
+
+  private getPendingDeletedIds(deleteType: PendingWrite['type']): Set<string> {
+    const ids = new Set<string>();
+    for (const w of this.outbox) {
+      if (w.type === deleteType && w.status !== 'synced' && w.payload?.id) {
+        ids.add(w.payload.id);
+      }
+    }
+    return ids;
+  }
+
+  // --- CLOUD MERGE HELPERS ---
+  private mergeCommuters(cloudList: UserProfile[]): void {
+    const map = new Map<string, UserProfile>();
+    this.commutersDirectory.forEach((c) => map.set(c.device_id, this.stripPhoneForPublic(c)));
+    cloudList.forEach((c) => {
+      const existing = map.get(c.device_id);
+      const cleanC = this.stripPhoneForPublic(c);
+      if (c.device_id === this.deviceId) {
+        const localUpdated = this.userProfile.updatedAt || 0;
+        const cloudUpdated = c.updatedAt || 0;
+        if (cloudUpdated > localUpdated) {
+          this.userProfile = {
+            ...this.userProfile,
+            ...cleanC,
+            phone: this.userProfile.phone,
+            ownerUid: cleanC.ownerUid || this.userProfile.ownerUid,
+            userId: cleanC.userId || cleanC.ownerUid || this.userProfile.userId,
+          };
+          safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+        }
+        map.set(c.device_id, this.stripPhoneForPublic(this.userProfile));
+      } else {
+        map.set(c.device_id, existing ? { ...existing, ...cleanC } : cleanC);
+      }
+    });
+    this.commutersDirectory = Array.from(map.values()).sort(
+      (a, b) => (b.reputation_score || 0) - (a.reputation_score || 0)
+    );
+    safeSet(STORAGE_KEYS.COMMUTERS_DIRECTORY, this.commutersDirectory);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('commuters', this.commutersDirectory);
+  }
+
+  private mergeRoutes(cloudList: RouteItem[]): void {
+    const map = new Map<string, RouteItem>();
+    this.routes.forEach((r) => map.set(r.id, r));
+    cloudList.forEach((r) => {
+      const existing = map.get(r.id);
+      map.set(r.id, existing ? { ...existing, ...r } : r);
+    });
+    this.routes = Array.from(map.values());
+    safeSet(STORAGE_KEYS.ROUTES, this.routes);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('routes', this.routes);
+  }
+
+  private mergeFareReports(cloudList: FareReport[]): void {
+    const deletedIds = this.getPendingDeletedIds('fare_delete');
+    const map = new Map<string, FareReport>();
+    this.fareReports.forEach((f) => {
+      if (!deletedIds.has(f.id)) map.set(f.id, f);
+    });
+    cloudList.forEach((f) => {
+      if (deletedIds.has(f.id)) return;
+      const existing = map.get(f.id);
+      map.set(f.id, existing ? { ...existing, ...f, userVote: existing.userVote } : f);
+    });
+    this.fareReports = Array.from(map.values()).sort((a, b) => b.reported_at - a.reported_at);
+    safeSet(STORAGE_KEYS.FARE_REPORTS, this.fareReports);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('fare_reports', this.fareReports);
+  }
+
+  private mergeStatusReports(cloudList: StatusReport[]): void {
+    const deletedIds = this.getPendingDeletedIds('status_delete');
+    const map = new Map<string, StatusReport>();
+    this.statusReports.forEach((s) => {
+      if (!deletedIds.has(s.id)) map.set(s.id, s);
+    });
+    cloudList.forEach((s) => {
+      if (!deletedIds.has(s.id)) map.set(s.id, s);
+    });
+    this.statusReports = Array.from(map.values()).sort((a, b) => b.reported_at - a.reported_at);
+    safeSet(STORAGE_KEYS.STATUS_REPORTS, this.statusReports);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('status_reports', this.statusReports);
+  }
+
+  private mergeIntercityReports(cloudList: IntercityReport[]): void {
+    const deletedIds = this.getPendingDeletedIds('intercity_delete');
+    const map = new Map<string, IntercityReport>();
+    this.intercityReports.forEach((r) => {
+      if (!deletedIds.has(r.id)) map.set(r.id, r);
+    });
+    cloudList.forEach((r) => {
+      if (deletedIds.has(r.id)) return;
+      const existing = map.get(r.id);
+      map.set(r.id, existing ? { ...existing, ...r, userVote: existing.userVote } : r);
+    });
+    this.intercityReports = Array.from(map.values()).sort((a, b) => b.reportedAt - a.reportedAt);
+    safeSet(STORAGE_KEYS.INTERCITY_REPORTS, this.intercityReports);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('intercity_reports', this.intercityReports);
+  }
+
+  private mergeTransporters(cloudList: TransporterProfile[]): void {
+    const deletedIds = this.getPendingDeletedIds('transporter_delete');
+    const map = new Map<string, TransporterProfile>();
+    this.transporters.forEach((t) => {
+      if (!deletedIds.has(t.id)) map.set(t.id, t);
+    });
+    cloudList.forEach((t) => {
+      if (deletedIds.has(t.id)) return;
+      const existing = map.get(t.id);
+      if (existing) {
+        const newer = (t.lastRouteUpdate || 0) >= (existing.lastRouteUpdate || 0) ? { ...existing, ...t } : { ...t, ...existing };
+        map.set(t.id, { ...newer, userLiked: existing.userLiked });
+      } else {
+        map.set(t.id, t);
+      }
+    });
+    this.transporters = Array.from(map.values()).sort((a, b) => b.lastRouteUpdate - a.lastRouteUpdate);
+    safeSet(STORAGE_KEYS.TRANSPORTERS, this.transporters);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('transporters', this.transporters);
+  }
+
+  private mergeSocialInteractions(cloudList: CommuterSocialInteraction[]): void {
+    const deletedIds = this.getPendingDeletedIds('social_interaction_delete');
+    const map = new Map<string, CommuterSocialInteraction>();
+    this.socialInteractions.forEach((s) => {
+      if (!deletedIds.has(s.id)) map.set(s.id, s);
+    });
+    cloudList.forEach((s) => {
+      if (deletedIds.has(s.id)) return;
+      const existing = map.get(s.id);
+      if (existing) {
+        const newer = (s.updatedAt || s.createdAt) >= (existing.updatedAt || existing.createdAt)
+          ? { ...existing, ...s }
+          : { ...s, ...existing };
+        map.set(s.id, { ...newer, userReaction: existing.userReaction });
+      } else {
+        map.set(s.id, s);
+      }
+    });
+    this.socialInteractions = Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
+    safeSet(STORAGE_KEYS.SOCIAL_INTERACTIONS, this.socialInteractions);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('social_interactions', this.socialInteractions);
+  }
+
+  private mergeSocialReplies(cloudList: SocialReply[]): void {
+    const deletedIds = this.getPendingDeletedIds('social_reply_delete');
+    const map = new Map<string, SocialReply>();
+    this.socialReplies.forEach((r) => {
+      if (!deletedIds.has(r.id)) map.set(r.id, r);
+    });
+    cloudList.forEach((r) => {
+      if (deletedIds.has(r.id)) return;
+      const existing = map.get(r.id);
+      if (existing) {
+        const newer = (r.updatedAt || r.createdAt) >= (existing.updatedAt || existing.createdAt)
+          ? { ...existing, ...r }
+          : { ...r, ...existing };
+        map.set(r.id, newer);
+      } else {
+        map.set(r.id, r);
+      }
+    });
+    this.socialReplies = Array.from(map.values()).sort((a, b) => a.createdAt - b.createdAt);
+    safeSet(STORAGE_KEYS.SOCIAL_REPLIES, this.socialReplies);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('social_replies', this.socialReplies);
+  }
+
+  private mergeSocialReactions(cloudList: SocialReactionRecord[]): void {
+    const deletedIds = this.getPendingDeletedIds('social_reaction_delete');
+    const map = new Map<string, SocialReactionRecord>();
+    this.socialReactions.forEach((rec) => {
+      if (!deletedIds.has(rec.id)) map.set(rec.id, rec);
+    });
+    cloudList.forEach((rec) => {
+      if (deletedIds.has(rec.id)) return;
+      const existing = map.get(rec.id);
+      if (!existing || (rec.updatedAt || rec.createdAt) >= (existing.updatedAt || existing.createdAt)) {
+        map.set(rec.id, rec);
+      }
+    });
+    this.socialReactions = Array.from(map.values());
+    safeSet(STORAGE_KEYS.SOCIAL_REACTIONS, this.socialReactions);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('social_reactions', this.socialReactions);
+  }
+
+  private mergeNotifications(cloudList: CommuterNotification[]): void {
+    const map = new Map<string, CommuterNotification>();
+    this.notifications.forEach((n) => map.set(n.id, n));
+    cloudList.forEach((n) => {
+      const existing = map.get(n.id);
+      map.set(n.id, existing ? { ...existing, ...n, read: existing.read || n.read } : n);
+    });
+    this.notifications = Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
+    safeSet(STORAGE_KEYS.NOTIFICATIONS, this.notifications);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('notifications', this.notifications);
+  }
+
+  private mergeBoardingConfirmations(cloudList: BoardingConfirmation[]): void {
+    const map = new Map<string, BoardingConfirmation>();
+    this.boardingConfirmations.forEach((b) => map.set(b.id, b));
+    cloudList.forEach((b) => map.set(b.id, b));
+    this.boardingConfirmations = Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
+    safeSet(STORAGE_KEYS.BOARDING_CONFIRMATIONS, this.boardingConfirmations);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('boarding_confirmations', this.boardingConfirmations);
+  }
+
+  private mergeLocationAnchors(cloudList: LocationAnchor[]): void {
+    const map = new Map<string, LocationAnchor>();
+    this.locationAnchors.forEach((a) => map.set(a.deviceId, a));
+    cloudList.forEach((a) => map.set(a.deviceId, a));
+    this.locationAnchors = Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
+    safeSet(STORAGE_KEYS.LOCATION_ANCHORS, this.locationAnchors);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('location_anchors', this.locationAnchors);
+  }
+
+  private applyCloudSnapshot(data: CloudSnapshotData): void {
+    if (data.privatePhone && !this.userProfile.phone) {
+      this.userProfile.phone = data.privatePhone;
+      safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    }
+    this.mergeCommuters(data.commuters);
+    this.mergeRoutes(data.routes);
+    this.mergeFareReports(data.fareReports);
+    this.mergeStatusReports(data.statusReports);
+    this.mergeIntercityReports(data.intercityReports);
+    this.mergeTransporters(data.transporters);
+    this.mergeSocialInteractions(data.socialInteractions);
+    this.mergeSocialReplies(data.socialReplies);
+    this.mergeSocialReactions(data.socialReactions);
+    this.mergeNotifications(data.notifications);
+    this.mergeBoardingConfirmations(data.boardingConfirmations);
+    this.mergeLocationAnchors(data.locationAnchors);
+    this.cloudConnected = true;
+    this.lastSyncedAt = Date.now();
+    this.lastSyncError = null;
+    safeSet(STORAGE_KEYS.LAST_SYNCED_AT, this.lastSyncedAt);
+    this.notifyChange();
+  }
+
+  private attachCloudListeners(): void {
+    const uid = auth.currentUser?.uid || null;
+    if (this.cloudUnsubscribe && this.activeSubscribedUid === uid) return;
+    if (!this.isEffectivelyOnline()) return;
+
+    this.detachCloudListeners();
+    try {
+      this.activeSubscribedUid = uid;
+      this.cloudUnsubscribe = subscribeToCloudCollections((key, items) => {
+        if (!this.isEffectivelyOnline()) return;
+        switch (key) {
+          case 'commuters':
+            this.mergeCommuters(items as UserProfile[]);
+            break;
+          case 'routes':
+            this.mergeRoutes(items as RouteItem[]);
+            break;
+          case 'fareReports':
+            this.mergeFareReports(items as FareReport[]);
+            break;
+          case 'statusReports':
+            this.mergeStatusReports(items as StatusReport[]);
+            break;
+          case 'intercityReports':
+            this.mergeIntercityReports(items as IntercityReport[]);
+            break;
+          case 'transporters':
+            this.mergeTransporters(items as TransporterProfile[]);
+            break;
+          case 'socialInteractions':
+            this.mergeSocialInteractions(items as CommuterSocialInteraction[]);
+            break;
+          case 'socialReplies':
+            this.mergeSocialReplies(items as SocialReply[]);
+            break;
+          case 'socialReactions':
+            this.mergeSocialReactions(items as SocialReactionRecord[]);
+            break;
+          case 'notifications':
+            this.mergeNotifications(items as CommuterNotification[]);
+            break;
+          case 'boardingConfirmations':
+            this.mergeBoardingConfirmations(items as BoardingConfirmation[]);
+            break;
+          case 'locationAnchors':
+            this.mergeLocationAnchors(items as LocationAnchor[]);
+            break;
+        }
+        this.cloudConnected = true;
+        this.lastSyncedAt = Date.now();
+        safeSet(STORAGE_KEYS.LAST_SYNCED_AT, this.lastSyncedAt);
+        this.notifyChange();
+      }, uid);
+    } catch {
+      // Ignore attach warning when offline
+    }
+  }
+
+  private detachCloudListeners(): void {
+    if (this.cloudUnsubscribe) {
+      this.cloudUnsubscribe();
+      this.cloudUnsubscribe = null;
+      this.activeSubscribedUid = null;
+    }
+  }
+
+  // --- SUBSCRIPTION ---
   public subscribe(cb: () => void): () => void {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
@@ -271,8 +796,121 @@ class FambaiOfflineStore {
     this.listeners.forEach((fn) => fn());
   }
 
+  // --- OWNERSHIP CHECK ---
+  public isOwnerOf(ownerUid?: string, itemDeviceId?: string): boolean {
+    const uid = this.currentAuthUid || auth.currentUser?.uid;
+    if (ownerUid && uid && ownerUid === uid) return true;
+    if (itemDeviceId && itemDeviceId === this.deviceId) {
+      if (!ownerUid || !uid || ownerUid === this.userProfile.ownerUid) return true;
+    }
+    return false;
+  }
+
+  // --- REACTION AGGREGATION HELPERS ---
+  private computeReactionSummary(
+    targetType: ReactionTargetType,
+    targetId: string,
+    baseUpOrLike: number = 0,
+    baseDownOrDislike: number = 0
+  ): {
+    upOrLikeCount: number;
+    downOrDislikeCount: number;
+    myReaction?: 'up' | 'down' | 'like' | 'dislike';
+  } {
+    const matching = this.socialReactions.filter(
+      (r) => r.targetType === targetType && r.targetId === targetId
+    );
+    const upReactions = matching.filter((r) => r.reaction === 'up' || r.reaction === 'like').length;
+    const downReactions = matching.filter((r) => r.reaction === 'down' || r.reaction === 'dislike').length;
+    const mine = matching.find((r) => r.deviceId === this.deviceId);
+    return {
+      upOrLikeCount: Math.max(baseUpOrLike, upReactions),
+      downOrDislikeCount: Math.max(baseDownOrDislike, downReactions),
+      myReaction: mine?.reaction,
+    };
+  }
+
+  private toggleReactionRecord(
+    targetType: ReactionTargetType,
+    targetId: string,
+    desired: 'up' | 'down' | 'like' | 'dislike'
+  ): { added: boolean; removed: boolean } {
+    const recId = `${targetType}_${targetId}_${this.deviceId}`;
+    const existingIdx = this.socialReactions.findIndex((r) => r.id === recId);
+    const now = Date.now();
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
+
+    if (existingIdx >= 0 && this.socialReactions[existingIdx].reaction === desired) {
+      // Undo reaction
+      this.socialReactions.splice(existingIdx, 1);
+      safeSet(STORAGE_KEYS.SOCIAL_REACTIONS, this.socialReactions);
+      if (sqliteDb.isReady()) sqliteDb.deleteRecord('social_reactions', recId);
+      this.enqueueWrite('social_reaction_delete', { id: recId }, true);
+      this.notifyChange();
+      return { added: false, removed: true };
+    }
+
+    const record: SocialReactionRecord = {
+      id: recId,
+      targetType,
+      targetId,
+      reaction: desired,
+      deviceId: this.deviceId,
+      ownerUid: uid,
+      username: this.getUsername(),
+      createdAt: existingIdx >= 0 ? this.socialReactions[existingIdx].createdAt : now,
+      updatedAt: now,
+    };
+
+    if (existingIdx >= 0) {
+      this.socialReactions[existingIdx] = record;
+    } else {
+      this.socialReactions = [record, ...this.socialReactions];
+    }
+
+    safeSet(STORAGE_KEYS.SOCIAL_REACTIONS, this.socialReactions);
+    if (sqliteDb.isReady()) sqliteDb.upsertRecord('social_reactions', record.id, record, now);
+    this.enqueueWrite('social_reaction_record', record, true);
+    this.notifyChange();
+    return { added: true, removed: false };
+  }
+
+  // --- SYNC STATUS & CURRENCY ---
+  public getSyncStatus(): SyncStatusInfo {
+    const authStat = getCurrentAuthStatus();
+    return {
+      isSyncing: this.isSyncing,
+      lastSyncedAt: this.lastSyncedAt,
+      lastSyncError: this.lastSyncError,
+      cloudConnected: this.cloudConnected && this.isEffectivelyOnline(),
+      sqliteReady: this.sqliteReady,
+      sqliteRowCount: sqliteDb.isReady() ? sqliteDb.getTotalRowCount() : 0,
+      authReady: !!authStat.uid,
+      authUid: authStat.uid,
+    };
+  }
+
+  public getAuthStatus() {
+    return getCurrentAuthStatus();
+  }
+
+  public getDisplayCurrency(): DisplayCurrency {
+    return this.displayCurrency;
+  }
+
+  public setDisplayCurrency(currency: DisplayCurrency): void {
+    this.displayCurrency = currency;
+    safeSet(STORAGE_KEYS.DISPLAY_CURRENCY, currency);
+    this.notifyChange();
+  }
+
+  // --- PROFILE & IDENTITY ---
   public getDeviceId(): string {
     return this.deviceId;
+  }
+
+  public getUserId(): string {
+    return this.userProfile.ownerUid || this.userProfile.userId || `usr-${this.deviceId}`;
   }
 
   public getUserProfile(): UserProfile {
@@ -291,6 +929,46 @@ class FambaiOfflineStore {
     return this.userProfile.commuterBadge || 'Daily Commuter';
   }
 
+  public getCommutersDirectory(): UserProfile[] {
+    this.ensureLocalUserInDirectory();
+    return [...this.commutersDirectory];
+  }
+
+  private enqueueWrite(type: PendingWrite['type'], payload: any, triggerSync = true): void {
+    const pendingWrite: PendingWrite = {
+      id: `outbox-${type}-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+      type,
+      payload,
+      created_at: Date.now(),
+      retry_count: 0,
+      status: 'pending',
+    };
+    this.outbox = [pendingWrite, ...this.outbox];
+    safeSet(STORAGE_KEYS.OUTBOX_PENDING, this.outbox);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('outbox_pending', pendingWrite.id, pendingWrite, pendingWrite.created_at);
+    }
+    this.notifyChange();
+    if (triggerSync) {
+      this.flushOutbox();
+    }
+  }
+
+  private syncProfileToOutbox(triggerFlush = true): void {
+    this.userProfile.updatedAt = Date.now();
+    safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    if (sqliteDb.isReady() && this.userProfile.phone !== undefined) {
+      sqliteDb.upsertRecord('private_profile', this.deviceId, {
+        device_id: this.deviceId,
+        ownerUid: this.userProfile.ownerUid,
+        phone: this.userProfile.phone,
+        updatedAt: this.userProfile.updatedAt,
+      });
+    }
+    this.ensureLocalUserInDirectory();
+    this.enqueueWrite('profile_update', { ...this.userProfile }, triggerFlush);
+  }
+
   public updateUserProfile(updates: Partial<UserProfile>): UserProfile {
     let handle = updates.handle || this.userProfile.handle;
     if (updates.username && !updates.handle) {
@@ -300,29 +978,309 @@ class FambaiOfflineStore {
       ...this.userProfile,
       ...updates,
       handle,
+      updatedAt: Date.now(),
     };
     safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    if (sqliteDb.isReady() && updates.phone !== undefined) {
+      sqliteDb.upsertRecord('private_profile', this.deviceId, {
+        device_id: this.deviceId,
+        ownerUid: this.userProfile.ownerUid,
+        phone: this.userProfile.phone || '',
+        updatedAt: this.userProfile.updatedAt,
+      });
+    }
+    this.ensureLocalUserInDirectory();
+    this.enqueueWrite('profile_update', { ...this.userProfile }, true);
     this.notifyChange();
     return { ...this.userProfile };
   }
 
   public updatePhone(phone: string): void {
     this.userProfile.phone = phone;
-    this.userProfile.reputation_score += 15; // Bonus for linking phone
+    this.userProfile.reputation_score += 15;
+    this.userProfile.updatedAt = Date.now();
     safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('private_profile', this.deviceId, {
+        device_id: this.deviceId,
+        ownerUid: this.userProfile.ownerUid,
+        phone,
+        updatedAt: this.userProfile.updatedAt,
+      });
+    }
+    this.ensureLocalUserInDirectory();
+    this.enqueueWrite('private_profile_update', {
+      device_id: this.deviceId,
+      phone,
+      updatedAt: this.userProfile.updatedAt,
+    }, true);
     this.notifyChange();
   }
 
+  // --- MENTION EXTRACTION & NOTIFICATIONS ---
+  private extractMentions(text: string): {
+    mentionedHandles: string[];
+    mentionedDeviceIds: string[];
+    matchedCommuters: UserProfile[];
+  } {
+    const matches = text.match(/@[a-zA-Z0-9_]+/g) || [];
+    const mentionedHandles = Array.from(new Set(matches.map((m) => m.toLowerCase())));
+    const matchedCommuters: UserProfile[] = [];
+    const mentionedDeviceIds = new Set<string>();
+
+    for (const h of mentionedHandles) {
+      const found = this.commutersDirectory.find(
+        (c) =>
+          (c.handle || '').toLowerCase() === h ||
+          '@' + (c.username || '').trim().toLowerCase().replace(/\s+/g, '_') === h
+      );
+      if (found) {
+        matchedCommuters.push(found);
+        mentionedDeviceIds.add(found.device_id);
+      }
+    }
+
+    return {
+      mentionedHandles,
+      mentionedDeviceIds: Array.from(mentionedDeviceIds),
+      matchedCommuters,
+    };
+  }
+
+  private createNotification(params: {
+    type: NotificationType;
+    recipientDeviceId: string;
+    recipientUid?: string;
+    targetType: string;
+    targetId: string;
+    postId?: string;
+    snippet: string;
+    allowSelf?: boolean;
+  }): void {
+    if (!params.recipientDeviceId) return;
+    if (!params.allowSelf && params.recipientDeviceId === this.deviceId) return;
+
+    const recipientProfile = this.commutersDirectory.find(
+      (c) => c.device_id === params.recipientDeviceId
+    );
+    const resolvedRecipientUid = params.recipientUid || recipientProfile?.ownerUid;
+    const senderUid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
+
+    const notif: CommuterNotification = {
+      id: `notif-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+      type: params.type,
+      recipientDeviceId: params.recipientDeviceId,
+      recipientUid: resolvedRecipientUid,
+      senderDeviceId: this.deviceId,
+      senderUid,
+      senderUsername: this.getUsername(),
+      senderHandle: this.getUserHandle(),
+      targetType: params.targetType,
+      targetId: params.targetId,
+      postId: params.postId,
+      snippet: params.snippet.slice(0, 180),
+      read: false,
+      createdAt: Date.now(),
+    };
+
+    this.notifications = [notif, ...this.notifications];
+    safeSet(STORAGE_KEYS.NOTIFICATIONS, this.notifications);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('notifications', notif.id, notif, notif.createdAt);
+    }
+    this.enqueueWrite('notification_create', notif, false);
+  }
+
+  public getNotifications(): CommuterNotification[] {
+    const uid = this.currentAuthUid || auth.currentUser?.uid;
+    return this.notifications
+      .filter((n) => n.recipientDeviceId === this.deviceId || (uid && n.recipientUid === uid))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  public getUnreadNotificationsCount(): number {
+    return this.getNotifications().filter((n) => !n.read).length;
+  }
+
+  public markNotificationRead(notifId: string): void {
+    const n = this.notifications.find((item) => item.id === notifId);
+    if (!n || n.read) return;
+    n.read = true;
+    safeSet(STORAGE_KEYS.NOTIFICATIONS, this.notifications);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('notifications', n.id, n, Date.now());
+    }
+    this.enqueueWrite('notification_update', { id: n.id, read: true }, true);
+    this.notifyChange();
+  }
+
+  public markAllNotificationsRead(): void {
+    const mine = this.getNotifications().filter((n) => !n.read);
+    if (mine.length === 0) return;
+    const mineIds = new Set(mine.map((m) => m.id));
+    this.notifications.forEach((n) => {
+      if (mineIds.has(n.id)) {
+        n.read = true;
+        if (sqliteDb.isReady()) sqliteDb.upsertRecord('notifications', n.id, n, Date.now());
+        this.enqueueWrite('notification_update', { id: n.id, read: true }, false);
+      }
+    });
+    safeSet(STORAGE_KEYS.NOTIFICATIONS, this.notifications);
+    this.notifyChange();
+    this.flushOutbox();
+  }
+
+  // --- LOCATION ANCHORS ---
   public getUserLocation(): UserLocation {
     return { ...this.userLocation };
+  }
+
+  public getNearestRankToUser(loc: UserLocation = this.userLocation): Rank | undefined {
+    if (this.ranks.length === 0) return undefined;
+    let closest = this.ranks[0];
+    let minDist = calculateDistanceKm(loc.lat, loc.lng, closest.lat, closest.lng);
+    for (let i = 1; i < this.ranks.length; i++) {
+      const r = this.ranks[i];
+      const d = calculateDistanceKm(loc.lat, loc.lng, r.lat, r.lng);
+      if (d < minDist) {
+        minDist = d;
+        closest = r;
+      }
+    }
+    return closest;
   }
 
   public setUserLocation(loc: UserLocation): void {
     this.userLocation = { ...loc, timestamp: Date.now() };
     safeSet(STORAGE_KEYS.USER_LOCATION, this.userLocation);
+
+    const nearest = this.getNearestRankToUser(this.userLocation);
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
+    const anchor: LocationAnchor = {
+      deviceId: this.deviceId,
+      ownerUid: uid,
+      username: this.getUsername(),
+      lat: this.userLocation.lat,
+      lng: this.userLocation.lng,
+      name: this.userLocation.name,
+      source: this.userLocation.source,
+      accuracyMeters: this.userLocation.accuracyMeters,
+      nearestRankId: nearest?.id,
+      nearestRankName: nearest?.name,
+      timestamp: this.userLocation.timestamp,
+    };
+
+    const idx = this.locationAnchors.findIndex((a) => a.deviceId === this.deviceId);
+    if (idx >= 0) this.locationAnchors[idx] = anchor;
+    else this.locationAnchors = [anchor, ...this.locationAnchors];
+    safeSet(STORAGE_KEYS.LOCATION_ANCHORS, this.locationAnchors);
+    if (sqliteDb.isReady()) sqliteDb.upsertRecord('location_anchors', anchor.deviceId, anchor, anchor.timestamp);
+
+    this.enqueueWrite('location_anchor', anchor, true);
     this.notifyChange();
   }
 
+  public getLocationAnchors(): LocationAnchor[] {
+    return [...this.locationAnchors];
+  }
+
+  // --- ONE-TAP "I BOARDED HERE" ---
+  public confirmBoardingAtRank(rankId?: string): {
+    success: boolean;
+    confirmation?: BoardingConfirmation;
+    rank?: Rank;
+    alreadyBoarded?: boolean;
+  } {
+    const rank = rankId ? this.getRankById(rankId) : this.getNearestRankToUser(this.userLocation);
+    if (!rank) return { success: false };
+
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    const recentSame = this.boardingConfirmations.find(
+      (b) => b.rankId === rank.id && b.deviceId === this.deviceId && b.createdAt > oneHourAgo
+    );
+    if (recentSame) {
+      return { success: true, confirmation: recentSame, rank, alreadyBoarded: true };
+    }
+
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
+    const confirmation: BoardingConfirmation = {
+      id: `brd-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+      rankId: rank.id,
+      rankName: rank.name,
+      city: rank.city,
+      deviceId: this.deviceId,
+      ownerUid: uid,
+      username: this.getUsername(),
+      userHandle: this.getUserHandle(),
+      statement: 'I boarded here',
+      lat: this.userLocation.lat,
+      lng: this.userLocation.lng,
+      locationSource: this.userLocation.source,
+      createdAt: Date.now(),
+    };
+
+    this.boardingConfirmations = [confirmation, ...this.boardingConfirmations];
+    safeSet(STORAGE_KEYS.BOARDING_CONFIRMATIONS, this.boardingConfirmations);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('boarding_confirmations', confirmation.id, confirmation, confirmation.createdAt);
+    }
+
+    this.userProfile.reports_count += 1;
+    this.userProfile.reputation_score += 5;
+    this.syncProfileToOutbox(false);
+
+    this.enqueueWrite('boarding_confirmation', confirmation, true);
+    this.notifyChange();
+    return { success: true, confirmation, rank, alreadyBoarded: false };
+  }
+
+  public getBoardingConfirmationsForRank(rankId: string): BoardingConfirmation[] {
+    return this.boardingConfirmations
+      .filter((b) => b.rankId === rankId)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  public getBoardingCountForRank(rankId: string): number {
+    const uniqueDevices = new Set<string>();
+    for (const b of this.boardingConfirmations) {
+      if (b.rankId === rankId) {
+        uniqueDevices.add(b.deviceId);
+      }
+    }
+    return uniqueDevices.size;
+  }
+
+  public getBoardingStatementForRank(rankId: string): string {
+    const count = this.getBoardingCountForRank(rankId);
+    if (count === 0) return '0 commuters boarded here yet';
+    if (count === 1) return '1 commuter boarded here';
+    return `${count} commuters boarded here`;
+  }
+
+  public hasUserBoardedRankRecently(rankId: string): boolean {
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    return this.boardingConfirmations.some(
+      (b) => b.rankId === rankId && b.deviceId === this.deviceId && b.createdAt > oneHourAgo
+    );
+  }
+
+  public getMyBoardingConfirmations(): BoardingConfirmation[] {
+    return this.boardingConfirmations
+      .filter((b) => b.deviceId === this.deviceId)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  // --- RATING HELPER FOR TERMINI / TRANSPORTERS / COMMUTERS ---
+  public getRatingSummaryForTarget(targetType: SocialTargetType, targetId: string): { avg: number; count: number } {
+    const rated = this.socialInteractions.filter(
+      (s) => s.targetType === targetType && s.targetId === targetId && typeof s.rating === 'number'
+    );
+    if (rated.length === 0) return { avg: 0, count: 0 };
+    const total = rated.reduce((sum, s) => sum + (s.rating || 0), 0);
+    return { avg: Number((total / rated.length).toFixed(1)), count: rated.length };
+  }
+
+  // --- CONNECTIVITY ---
   public isEffectivelyOnline(): boolean {
     if (this.simulatedOffline) return false;
     if (typeof navigator !== 'undefined') {
@@ -340,19 +1298,23 @@ class FambaiOfflineStore {
     safeSet(STORAGE_KEYS.OFFLINE_SIMULATION, val);
     this.notifyChange();
     if (!val) {
-      // Back online, try flushing outbox
-      this.flushOutbox();
+      this.onNetworkReconnected();
+    } else {
+      this.cloudConnected = false;
+      this.detachCloudListeners();
+      this.notifyChange();
     }
   }
 
   public getPendingWritesCount(): number {
-    return this.outbox.filter((w) => w.status === 'pending' || w.status === 'syncing').length;
+    return this.outbox.filter((w) => w.status === 'pending' || w.status === 'syncing' || w.status === 'failed').length;
   }
 
   public getOutboxItems(): PendingWrite[] {
     return [...this.outbox];
   }
 
+  // --- ROUTES & RANKS ---
   public getRoutes(): RouteItem[] {
     return [...this.routes];
   }
@@ -387,7 +1349,7 @@ class FambaiOfflineStore {
     return this.routes.filter((r) => r.category === category);
   }
 
-  // Intercity Bus Knowledgebase Methods
+  // --- INTERCITY ---
   public getBusOperators(): BusOperator[] {
     return [...this.busOperators];
   }
@@ -404,13 +1366,21 @@ class FambaiOfflineStore {
     return this.intercityRoutes.find((r) => r.id === id);
   }
 
+  private hydrateIntercityVote(rep: IntercityReport): IntercityReport {
+    const summary = this.computeReactionSummary('intercity', rep.id, rep.upvotes || 0, rep.downvotes || 0);
+    return {
+      ...rep,
+      upvotes: summary.upOrLikeCount,
+      downvotes: summary.downOrDislikeCount,
+      userVote: summary.myReaction === 'up' || summary.myReaction === 'down' ? summary.myReaction : rep.userVote,
+    };
+  }
+
   public getIntercityReports(routeId?: string): IntercityReport[] {
-    if (routeId) {
-      return this.intercityReports
-        .filter((r) => r.routeId === routeId)
-        .sort((a, b) => b.reportedAt - a.reportedAt);
-    }
-    return [...this.intercityReports].sort((a, b) => b.reportedAt - a.reportedAt);
+    const base = routeId
+      ? this.intercityReports.filter((r) => r.routeId === routeId)
+      : [...this.intercityReports];
+    return base.map((r) => this.hydrateIntercityVote(r)).sort((a, b) => b.reportedAt - a.reportedAt);
   }
 
   public addIntercityReport(data: {
@@ -419,76 +1389,80 @@ class FambaiOfflineStore {
     operatorName: string;
     farePaidUSD: number;
     farePaidZiG?: number;
+    farePaidZAR?: number;
     departureTime?: string;
     departureTerminal: string;
     seatAvailability: 'plenty' | 'filling_fast' | 'full';
     busConditionRating: number;
     roadStatusNote?: string;
   }): IntercityReport {
+    const now = Date.now();
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
     const newReport: IntercityReport = {
-      id: 'rep-ic-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6),
+      id: 'rep-ic-' + now.toString(36) + '-' + Math.random().toString(36).substring(2, 6),
       routeId: data.routeId,
       operatorId: data.operatorId,
       operatorName: data.operatorName,
       farePaidUSD: data.farePaidUSD,
       farePaidZiG: data.farePaidZiG,
+      farePaidZAR: data.farePaidZAR,
       departureTime: data.departureTime,
       departureTerminal: data.departureTerminal,
       seatAvailability: data.seatAvailability,
       busConditionRating: data.busConditionRating,
       roadStatusNote: data.roadStatusNote,
-      reportedAt: Date.now(),
+      reportedAt: now,
       reporterDeviceId: this.deviceId,
-      upvotes: 1,
+      ownerUid: uid,
+      reporterUsername: this.getUsername(),
+      upvotes: 0,
       downvotes: 0,
-      userVote: 'up',
     };
 
     this.intercityReports = [newReport, ...this.intercityReports];
     safeSet(STORAGE_KEYS.INTERCITY_REPORTS, this.intercityReports);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('intercity_reports', newReport.id, newReport, now);
+    }
 
-    // Reward user profile
+    // Create owner's own reaction record instead of mutating parent upvotes
+    this.toggleReactionRecord('intercity', newReport.id, 'up');
+
     this.userProfile.reports_count += 1;
     this.userProfile.reputation_score += 15;
-    safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    this.syncProfileToOutbox(false);
 
-    // Queue in outbox
-    const pendingWrite: PendingWrite = {
-      id: 'outbox-ic-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6),
-      type: 'intercity_report',
-      payload: newReport,
-      created_at: Date.now(),
-      retry_count: 0,
-      status: 'pending',
-    };
-    this.outbox = [pendingWrite, ...this.outbox];
-    safeSet(STORAGE_KEYS.OUTBOX_PENDING, this.outbox);
-
-    this.notifyChange();
-    this.flushOutbox();
-
-    return newReport;
+    this.enqueueWrite('intercity_report', newReport, true);
+    return this.hydrateIntercityVote(newReport);
   }
 
   public voteIntercityReport(reportId: string, direction: 'up' | 'down'): void {
     const rep = this.intercityReports.find((r) => r.id === reportId);
     if (!rep) return;
-    if (rep.userVote === direction) return;
-
-    if (rep.userVote === 'up') rep.upvotes = Math.max(0, rep.upvotes - 1);
-    if (rep.userVote === 'down') rep.downvotes = Math.max(0, rep.downvotes - 1);
-
-    if (direction === 'up') rep.upvotes += 1;
-    if (direction === 'down') rep.downvotes += 1;
-    rep.userVote = direction;
-
-    safeSet(STORAGE_KEYS.INTERCITY_REPORTS, this.intercityReports);
-    this.notifyChange();
+    this.toggleReactionRecord('intercity', reportId, direction);
   }
 
-  // ==========================================
-  // TRANSPORTERS & OPERATORS DIRECTORY METHODS
-  // ==========================================
+  public deleteIntercityReport(reportId: string): boolean {
+    const rep = this.intercityReports.find((r) => r.id === reportId);
+    if (!rep || !this.isOwnerOf(rep.ownerUid, rep.reporterDeviceId)) return false;
+    this.intercityReports = this.intercityReports.filter((r) => r.id !== reportId);
+    safeSet(STORAGE_KEYS.INTERCITY_REPORTS, this.intercityReports);
+    if (sqliteDb.isReady()) sqliteDb.deleteRecord('intercity_reports', reportId);
+    this.enqueueWrite('intercity_delete', { id: reportId }, true);
+    this.notifyChange();
+    return true;
+  }
+
+  // --- TRANSPORTERS ---
+  private hydrateTransporterLikes(t: TransporterProfile): TransporterProfile {
+    const summary = this.computeReactionSummary('transporter', t.id, t.likes || 0, 0);
+    return {
+      ...t,
+      likes: summary.upOrLikeCount,
+      userLiked: summary.myReaction === 'like' || summary.myReaction === 'up',
+    };
+  }
+
   public getTransporters(city?: string, type?: string): TransporterProfile[] {
     let list = [...this.transporters];
     if (city && city !== 'All Cities') {
@@ -497,20 +1471,23 @@ class FambaiOfflineStore {
     if (type && type !== 'all') {
       list = list.filter((t) => t.transportType === type);
     }
-    return list.sort((a, b) => b.lastRouteUpdate - a.lastRouteUpdate);
+    return list.map((t) => this.hydrateTransporterLikes(t)).sort((a, b) => b.lastRouteUpdate - a.lastRouteUpdate);
   }
 
   public getTransporterById(id: string): TransporterProfile | undefined {
-    return this.transporters.find((t) => t.id === id);
+    const found = this.transporters.find((t) => t.id === id);
+    return found ? this.hydrateTransporterLikes(found) : undefined;
   }
 
   public getTransportersForRoute(routeId: string, routeName?: string): TransporterProfile[] {
     const rName = (routeName || '').toLowerCase();
-    return this.transporters.filter((t) => {
-      if (t.currentRouteId && t.currentRouteId === routeId) return true;
-      if (rName && t.currentRouteName && t.currentRouteName.toLowerCase().includes(rName)) return true;
-      return false;
-    });
+    return this.transporters
+      .filter((t) => {
+        if (t.currentRouteId && t.currentRouteId === routeId) return true;
+        if (rName && t.currentRouteName && t.currentRouteName.toLowerCase().includes(rName)) return true;
+        return false;
+      })
+      .map((t) => this.hydrateTransporterLikes(t));
   }
 
   public registerTransporter(data: {
@@ -525,8 +1502,10 @@ class FambaiOfflineStore {
     baseTerminus?: string;
     statusNote?: string;
   }): TransporterProfile {
+    const now = Date.now();
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
     const newTransporter: TransporterProfile = {
-      id: 'trans-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6),
+      id: 'trans-' + now.toString(36) + '-' + Math.random().toString(36).substring(2, 6),
       operatorName: data.operatorName.trim(),
       contactPhone: data.contactPhone.trim(),
       transportType: data.transportType,
@@ -538,23 +1517,31 @@ class FambaiOfflineStore {
       baseTerminus: data.baseTerminus ? data.baseTerminus.trim() : undefined,
       status: 'active',
       statusNote: data.statusNote ? data.statusNote.trim() : undefined,
-      registeredAt: Date.now(),
-      lastRouteUpdate: Date.now(),
+      registeredAt: now,
+      lastRouteUpdate: now,
       registeredByDeviceId: this.deviceId,
+      ownerUid: uid,
       username: this.getUsername(),
       userHandle: this.getUserHandle(),
-      likes: 1,
-      userLiked: true,
+      likes: 0,
     };
 
     this.transporters = [newTransporter, ...this.transporters];
     safeSet(STORAGE_KEYS.TRANSPORTERS, this.transporters);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('transporters', newTransporter.id, newTransporter, now);
+    }
 
-    // Update user profile badge to Transporter
-    this.updateUserProfile({ role: 'transporter', commuterBadge: 'Registered Transporter' });
+    this.toggleReactionRecord('transporter', newTransporter.id, 'like');
 
-    this.notifyChange();
-    return newTransporter;
+    this.userProfile.role = 'transporter';
+    this.userProfile.commuterBadge = 'Registered Transporter';
+    this.userProfile.reports_count += 1;
+    this.userProfile.reputation_score += 20;
+    this.syncProfileToOutbox(false);
+
+    this.enqueueWrite('transporter_register', newTransporter, true);
+    return this.hydrateTransporterLikes(newTransporter);
   }
 
   public updateTransporterRoute(
@@ -570,7 +1557,7 @@ class FambaiOfflineStore {
     }
   ): boolean {
     const item = this.transporters.find((t) => t.id === transporterId);
-    if (!item) return false;
+    if (!item || !this.isOwnerOf(item.ownerUid, item.registeredByDeviceId)) return false;
 
     item.currentRouteName = updates.currentRouteName.trim();
     if (updates.currentRouteId !== undefined) item.currentRouteId = updates.currentRouteId;
@@ -582,6 +1569,38 @@ class FambaiOfflineStore {
     item.lastRouteUpdate = Date.now();
 
     safeSet(STORAGE_KEYS.TRANSPORTERS, this.transporters);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('transporters', item.id, item, item.lastRouteUpdate);
+    }
+
+    this.enqueueWrite(
+      'transporter_update',
+      {
+        id: item.id,
+        updates: {
+          currentRouteName: item.currentRouteName,
+          currentRouteId: item.currentRouteId,
+          city: item.city,
+          baseTerminus: item.baseTerminus,
+          status: item.status,
+          statusNote: item.statusNote,
+          contactPhone: item.contactPhone,
+          lastRouteUpdate: item.lastRouteUpdate,
+        },
+      },
+      true
+    );
+    this.notifyChange();
+    return true;
+  }
+
+  public deleteTransporter(transporterId: string): boolean {
+    const item = this.transporters.find((t) => t.id === transporterId);
+    if (!item || !this.isOwnerOf(item.ownerUid, item.registeredByDeviceId)) return false;
+    this.transporters = this.transporters.filter((t) => t.id !== transporterId);
+    safeSet(STORAGE_KEYS.TRANSPORTERS, this.transporters);
+    if (sqliteDb.isReady()) sqliteDb.deleteRecord('transporters', transporterId);
+    this.enqueueWrite('transporter_delete', { id: transporterId }, true);
     this.notifyChange();
     return true;
   }
@@ -589,41 +1608,41 @@ class FambaiOfflineStore {
   public toggleLikeTransporter(transporterId: string): void {
     const item = this.transporters.find((t) => t.id === transporterId);
     if (!item) return;
-
-    if (item.userLiked) {
-      item.likes = Math.max(0, item.likes - 1);
-      item.userLiked = false;
-    } else {
-      item.likes += 1;
-      item.userLiked = true;
-    }
-
-    safeSet(STORAGE_KEYS.TRANSPORTERS, this.transporters);
-    this.notifyChange();
+    this.toggleReactionRecord('transporter', transporterId, 'like');
   }
 
-  // ==========================================
-  // SOCIAL INTERACTIONS & COMMUTER BUZZ METHODS
-  // ==========================================
+  // --- SOCIAL INTERACTIONS, THREADS & RATINGS ---
+  private hydrateSocialReactions(item: CommuterSocialInteraction): CommuterSocialInteraction {
+    const summary = this.computeReactionSummary('social', item.id, item.likes || 0, item.dislikes || 0);
+    return {
+      ...item,
+      likes: summary.upOrLikeCount,
+      dislikes: summary.downOrDislikeCount,
+      userReaction:
+        summary.myReaction === 'like' || summary.myReaction === 'dislike'
+          ? summary.myReaction
+          : item.userReaction,
+    };
+  }
+
   public getSocialInteractions(targetType?: string, targetId?: string): CommuterSocialInteraction[] {
     let list = [...this.socialInteractions];
-    if (targetType) {
-      list = list.filter((s) => s.targetType === targetType);
-    }
-    if (targetId) {
-      list = list.filter((s) => s.targetId === targetId);
-    }
-    return list.sort((a, b) => b.createdAt - a.createdAt);
+    if (targetType) list = list.filter((s) => s.targetType === targetType);
+    if (targetId) list = list.filter((s) => s.targetId === targetId);
+    return list.map((s) => this.hydrateSocialReactions(s)).sort((a, b) => b.createdAt - a.createdAt);
   }
 
   public getAllSocialInteractions(): CommuterSocialInteraction[] {
-    return [...this.socialInteractions].sort((a, b) => b.createdAt - a.createdAt);
+    return this.socialInteractions
+      .map((s) => this.hydrateSocialReactions(s))
+      .sort((a, b) => b.createdAt - a.createdAt);
   }
 
   public addSocialInteraction(data: {
     targetType: CommuterSocialInteraction['targetType'];
     targetId: string;
     targetName: string;
+    postType?: SocialPostType;
     comment: string;
     rating?: number;
     confirmedFare?: { amount: number; currency: Currency };
@@ -633,23 +1652,38 @@ class FambaiOfflineStore {
     abuseType?: AbuseCategory;
     abuseLocation?: string;
     abusePlateNumber?: string;
+    recommendedLocation?: string;
+    recommendedCommuterUsername?: string;
   }): CommuterSocialInteraction {
+    const now = Date.now();
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
+    const trimmedComment = data.comment.trim();
+    const { mentionedHandles, mentionedDeviceIds, matchedCommuters } = this.extractMentions(trimmedComment);
+
+    const resolvedPostType: SocialPostType =
+      data.postType || (data.isAbuseReport ? 'abuse' : trimmedComment.includes('?') ? 'question' : 'review');
+
     const newInteraction: CommuterSocialInteraction = {
-      id: 'soc-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6),
+      id: 'soc-' + now.toString(36) + '-' + Math.random().toString(36).substring(2, 6),
       targetType: data.targetType,
       targetId: data.targetId,
       targetName: data.targetName,
+      postType: resolvedPostType,
       username: this.getUsername(),
       userHandle: this.getUserHandle(),
       userBadge: this.getUserBadge(),
       avatarBg: this.userProfile.avatarColor || '#F27D26',
-      comment: data.comment.trim(),
+      comment: trimmedComment,
       rating: data.rating,
-      likes: 1, // Author like
+      likes: 0,
       dislikes: 0,
-      userReaction: 'like',
-      createdAt: Date.now(),
+      createdAt: now,
       deviceId: this.deviceId,
+      ownerUid: uid,
+      mentionedHandles: mentionedHandles.length > 0 ? mentionedHandles : undefined,
+      mentionedDeviceIds: mentionedDeviceIds.length > 0 ? mentionedDeviceIds : undefined,
+      recommendedLocation: data.recommendedLocation,
+      recommendedCommuterUsername: data.recommendedCommuterUsername,
       confirmedFare: data.confirmedFare,
       confirmedDepartureTime: data.confirmedDepartureTime,
       amenitiesReview: data.amenitiesReview,
@@ -661,13 +1695,43 @@ class FambaiOfflineStore {
 
     this.socialInteractions = [newInteraction, ...this.socialInteractions];
     safeSet(STORAGE_KEYS.SOCIAL_INTERACTIONS, this.socialInteractions);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('social_interactions', newInteraction.id, newInteraction, now);
+    }
 
-    // Reward commuter reputation
+    this.toggleReactionRecord('social', newInteraction.id, 'like');
+
     this.userProfile.reputation_score += data.isAbuseReport ? 20 : 10;
     this.userProfile.reports_count += 1;
-    safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    this.syncProfileToOutbox(false);
 
-    // If confirmed fare provided, automatically record it as a fare report too!
+    this.enqueueWrite('social_interaction', newInteraction, false);
+
+    // Generate Notifications for @tags
+    for (const targetUser of matchedCommuters) {
+      this.createNotification({
+        type: 'tag',
+        recipientDeviceId: targetUser.device_id,
+        recipientUid: targetUser.ownerUid,
+        targetType: data.targetType,
+        targetId: data.targetId,
+        postId: newInteraction.id,
+        snippet: `${this.getUsername()} tagged you in Commuter Buzz: "${trimmedComment.slice(0, 90)}"`,
+      });
+    }
+
+    // Generate Notification when rating a Commuter/User
+    if (data.targetType === 'commuter' && data.targetId) {
+      this.createNotification({
+        type: 'rating',
+        recipientDeviceId: data.targetId,
+        targetType: 'commuter',
+        targetId: data.targetId,
+        postId: newInteraction.id,
+        snippet: `${this.getUsername()} rated you ${data.rating ? `${data.rating}★` : ''} and commented: "${trimmedComment.slice(0, 80)}"`,
+      });
+    }
+
     if (data.confirmedFare && data.targetType === 'route') {
       this.reportFare(
         data.targetId,
@@ -676,35 +1740,221 @@ class FambaiOfflineStore {
         'Social Commuter Confirmation',
         data.confirmedDepartureTime || 'Confirmed on route'
       );
+    } else {
+      this.flushOutbox();
     }
 
+    return this.hydrateSocialReactions(newInteraction);
+  }
+
+  public updateSocialInteraction(
+    interactionId: string,
+    updates: { comment: string; rating?: number }
+  ): boolean {
+    const item = this.socialInteractions.find((s) => s.id === interactionId);
+    if (!item || !this.isOwnerOf(item.ownerUid, item.deviceId)) return false;
+
+    const trimmed = updates.comment.trim();
+    if (!trimmed) return false;
+
+    const { mentionedHandles, mentionedDeviceIds } = this.extractMentions(trimmed);
+    item.comment = trimmed;
+    if (updates.rating !== undefined) item.rating = updates.rating;
+    item.mentionedHandles = mentionedHandles.length > 0 ? mentionedHandles : undefined;
+    item.mentionedDeviceIds = mentionedDeviceIds.length > 0 ? mentionedDeviceIds : undefined;
+    item.updatedAt = Date.now();
+
+    safeSet(STORAGE_KEYS.SOCIAL_INTERACTIONS, this.socialInteractions);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('social_interactions', item.id, item, item.updatedAt);
+    }
+
+    this.enqueueWrite(
+      'social_interaction_edit',
+      {
+        id: item.id,
+        updates: {
+          comment: item.comment,
+          rating: item.rating,
+          mentionedHandles: item.mentionedHandles,
+          mentionedDeviceIds: item.mentionedDeviceIds,
+          updatedAt: item.updatedAt,
+        },
+      },
+      true
+    );
     this.notifyChange();
-    return newInteraction;
+    return true;
+  }
+
+  public deleteSocialInteraction(interactionId: string): boolean {
+    const item = this.socialInteractions.find((s) => s.id === interactionId);
+    if (!item || !this.isOwnerOf(item.ownerUid, item.deviceId)) return false;
+
+    this.socialInteractions = this.socialInteractions.filter((s) => s.id !== interactionId);
+    safeSet(STORAGE_KEYS.SOCIAL_INTERACTIONS, this.socialInteractions);
+    if (sqliteDb.isReady()) sqliteDb.deleteRecord('social_interactions', interactionId);
+
+    this.enqueueWrite('social_interaction_delete', { id: interactionId }, true);
+    this.notifyChange();
+    return true;
   }
 
   public reactSocialInteraction(interactionId: string, reaction: 'like' | 'dislike'): void {
     const item = this.socialInteractions.find((s) => s.id === interactionId);
     if (!item) return;
-
-    if (item.userReaction === reaction) {
-      // Undo reaction
-      if (reaction === 'like') item.likes = Math.max(0, item.likes - 1);
-      if (reaction === 'dislike') item.dislikes = Math.max(0, item.dislikes - 1);
-      item.userReaction = undefined;
-    } else {
-      if (item.userReaction === 'like') item.likes = Math.max(0, item.likes - 1);
-      if (item.userReaction === 'dislike') item.dislikes = Math.max(0, item.dislikes - 1);
-
-      if (reaction === 'like') item.likes += 1;
-      if (reaction === 'dislike') item.dislikes += 1;
-      item.userReaction = reaction;
+    const { added } = this.toggleReactionRecord('social', interactionId, reaction);
+    if (added && reaction === 'like' && item.deviceId && item.deviceId !== this.deviceId) {
+      this.createNotification({
+        type: 'like',
+        recipientDeviceId: item.deviceId,
+        recipientUid: item.ownerUid,
+        targetType: item.targetType,
+        targetId: item.targetId,
+        postId: item.id,
+        snippet: `${this.getUsername()} liked your post on ${item.targetName}: "${item.comment.slice(0, 70)}"`,
+      });
+      this.flushOutbox();
     }
-
-    safeSet(STORAGE_KEYS.SOCIAL_INTERACTIONS, this.socialInteractions);
-    this.notifyChange();
   }
 
-  // Auto-expire status reports past their expires_at
+  // --- THREADED SOCIAL REPLIES ---
+  public getRepliesForInteraction(interactionId: string): SocialReply[] {
+    return this.socialReplies
+      .filter((r) => r.interactionId === interactionId)
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  public getRepliesCountForInteraction(interactionId: string): number {
+    return this.socialReplies.filter((r) => r.interactionId === interactionId).length;
+  }
+
+  public addSocialReply(interactionId: string, comment: string): SocialReply | null {
+    const parent = this.socialInteractions.find((s) => s.id === interactionId);
+    const trimmed = comment.trim();
+    if (!parent || !trimmed) return null;
+
+    const now = Date.now();
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
+    const { mentionedHandles, mentionedDeviceIds, matchedCommuters } = this.extractMentions(trimmed);
+
+    const newReply: SocialReply = {
+      id: 'rep-' + now.toString(36) + '-' + Math.random().toString(36).substring(2, 6),
+      interactionId,
+      parentAuthorDeviceId: parent.deviceId,
+      parentAuthorUsername: parent.username,
+      deviceId: this.deviceId,
+      ownerUid: uid,
+      username: this.getUsername(),
+      userHandle: this.getUserHandle(),
+      userBadge: this.getUserBadge(),
+      avatarBg: this.userProfile.avatarColor || '#F27D26',
+      comment: trimmed,
+      mentionedHandles: mentionedHandles.length > 0 ? mentionedHandles : undefined,
+      mentionedDeviceIds: mentionedDeviceIds.length > 0 ? mentionedDeviceIds : undefined,
+      createdAt: now,
+    };
+
+    this.socialReplies = [...this.socialReplies, newReply];
+    safeSet(STORAGE_KEYS.SOCIAL_REPLIES, this.socialReplies);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('social_replies', newReply.id, newReply, now);
+    }
+
+    this.userProfile.reputation_score += 5;
+    this.syncProfileToOutbox(false);
+    this.enqueueWrite('social_reply', newReply, false);
+
+    // Notify parent post author
+    if (parent.deviceId && parent.deviceId !== this.deviceId) {
+      this.createNotification({
+        type: 'reply',
+        recipientDeviceId: parent.deviceId,
+        recipientUid: parent.ownerUid,
+        targetType: parent.targetType,
+        targetId: parent.targetId,
+        postId: parent.id,
+        snippet: `${this.getUsername()} replied on ${parent.targetName}: "${trimmed.slice(0, 80)}"`,
+      });
+    }
+
+    // Notify any @tagged commuters
+    for (const targetUser of matchedCommuters) {
+      if (targetUser.device_id !== parent.deviceId) {
+        this.createNotification({
+          type: 'tag',
+          recipientDeviceId: targetUser.device_id,
+          recipientUid: targetUser.ownerUid,
+          targetType: parent.targetType,
+          targetId: parent.targetId,
+          postId: parent.id,
+          snippet: `${this.getUsername()} tagged you in a reply: "${trimmed.slice(0, 80)}"`,
+        });
+      }
+    }
+
+    this.notifyChange();
+    this.flushOutbox();
+    return newReply;
+  }
+
+  public updateSocialReply(replyId: string, comment: string): boolean {
+    const reply = this.socialReplies.find((r) => r.id === replyId);
+    const trimmed = comment.trim();
+    if (!reply || !trimmed || !this.isOwnerOf(reply.ownerUid, reply.deviceId)) return false;
+
+    const { mentionedHandles, mentionedDeviceIds } = this.extractMentions(trimmed);
+    reply.comment = trimmed;
+    reply.mentionedHandles = mentionedHandles.length > 0 ? mentionedHandles : undefined;
+    reply.mentionedDeviceIds = mentionedDeviceIds.length > 0 ? mentionedDeviceIds : undefined;
+    reply.updatedAt = Date.now();
+
+    safeSet(STORAGE_KEYS.SOCIAL_REPLIES, this.socialReplies);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('social_replies', reply.id, reply, reply.updatedAt);
+    }
+
+    this.enqueueWrite(
+      'social_reply_edit',
+      {
+        id: reply.id,
+        updates: {
+          comment: reply.comment,
+          mentionedHandles: reply.mentionedHandles,
+          mentionedDeviceIds: reply.mentionedDeviceIds,
+          updatedAt: reply.updatedAt,
+        },
+      },
+      true
+    );
+    this.notifyChange();
+    return true;
+  }
+
+  public deleteSocialReply(replyId: string): boolean {
+    const reply = this.socialReplies.find((r) => r.id === replyId);
+    if (!reply || !this.isOwnerOf(reply.ownerUid, reply.deviceId)) return false;
+
+    this.socialReplies = this.socialReplies.filter((r) => r.id !== replyId);
+    safeSet(STORAGE_KEYS.SOCIAL_REPLIES, this.socialReplies);
+    if (sqliteDb.isReady()) sqliteDb.deleteRecord('social_replies', replyId);
+
+    this.enqueueWrite('social_reply_delete', { id: replyId }, true);
+    this.notifyChange();
+    return true;
+  }
+
+  // --- STATUS & FARES ---
+  private hydrateFareVote(f: FareReport): FareReport {
+    const summary = this.computeReactionSummary('fare', f.id, f.upvotes || 0, f.downvotes || 0);
+    return {
+      ...f,
+      upvotes: summary.upOrLikeCount,
+      downvotes: summary.downOrDislikeCount,
+      userVote: summary.myReaction === 'up' || summary.myReaction === 'down' ? summary.myReaction : f.userVote,
+    };
+  }
+
   public getActiveStatusesForRoute(routeId: string): StatusReport[] {
     const now = Date.now();
     return this.statusReports
@@ -715,10 +1965,10 @@ class FambaiOfflineStore {
   public getFareReportsForRoute(routeId: string): FareReport[] {
     return this.fareReports
       .filter((f) => f.route_id === routeId)
+      .map((f) => this.hydrateFareVote(f))
       .sort((a, b) => b.reported_at - a.reported_at);
   }
 
-  // Calculate summary and fare confidence indicator
   public getRouteSummary(routeId: string): ActiveRouteSummary | null {
     const route = this.getRouteById(routeId);
     if (!route) return null;
@@ -728,15 +1978,14 @@ class FambaiOfflineStore {
     const latestFare = fares[0];
     const latestStatus = activeStatuses[0];
 
-    // Calculate averages across currencies
     const usdFares = fares.filter((f) => f.currency === 'USD').slice(0, 5);
-    const avgUSD = usdFares.length > 0 
-      ? usdFares.reduce((sum, f) => sum + f.fare_amount, 0) / usdFares.length 
+    const avgUSD = usdFares.length > 0
+      ? usdFares.reduce((sum, f) => sum + f.fare_amount, 0) / usdFares.length
       : undefined;
 
-    const zwlFares = fares.filter((f) => f.currency === 'ZWL').slice(0, 5);
-    const avgZWL = zwlFares.length > 0 
-      ? zwlFares.reduce((sum, f) => sum + f.fare_amount, 0) / zwlFares.length 
+    const zwlFares = fares.filter((f) => f.currency === 'ZWL' || f.currency === 'ZWG').slice(0, 5);
+    const avgZWL = zwlFares.length > 0
+      ? zwlFares.reduce((sum, f) => sum + f.fare_amount, 0) / zwlFares.length
       : undefined;
 
     const zarFares = fares.filter((f) => f.currency === 'ZAR').slice(0, 5);
@@ -749,7 +1998,6 @@ class FambaiOfflineStore {
       ? bwpFares.reduce((sum, f) => sum + f.fare_amount, 0) / bwpFares.length
       : undefined;
 
-    // Confidence indicator: recency + upvotes
     let fareConfidence: 'high' | 'medium' | 'outdated' = 'high';
     let confidenceReason = 'Recently confirmed by commuters';
 
@@ -787,14 +2035,13 @@ class FambaiOfflineStore {
     };
   }
 
-  // Spam guard: limit reporting same route within 5 minutes (300 seconds)
   public checkSpamLimit(routeId: string): { allowed: boolean; remainingSeconds: number } {
     const record = safeGet<Record<string, number>>(STORAGE_KEYS.LAST_REPORTS_BY_ROUTE, {});
     const lastTime = record[routeId];
     if (!lastTime) return { allowed: true, remainingSeconds: 0 };
 
     const elapsedMs = Date.now() - lastTime;
-    const cooldownMs = 5 * 60 * 1000; // 5 minutes
+    const cooldownMs = 5 * 60 * 1000;
     if (elapsedMs < cooldownMs) {
       const remainingSeconds = Math.ceil((cooldownMs - elapsedMs) / 1000);
       return { allowed: false, remainingSeconds };
@@ -808,9 +2055,6 @@ class FambaiOfflineStore {
     safeSet(STORAGE_KEYS.LAST_REPORTS_BY_ROUTE, record);
   }
 
-  // --- OUTBOX PATTERN WRITES ---
-
-  // Add a new route with live fare and transport type carrying passengers
   public addRouteWithFare(data: {
     name: string;
     origin: string;
@@ -826,8 +2070,10 @@ class FambaiOfflineStore {
     statusType?: StatusType;
     note?: string;
   }): { route: RouteItem; fare: FareReport } {
-    const routeId = 'route-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6);
-    
+    const now = Date.now();
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
+    const routeId = 'route-' + now.toString(36) + '-' + Math.random().toString(36).substring(2, 6);
+
     const newRoute: RouteItem = {
       id: routeId,
       name: data.name.trim(),
@@ -842,24 +2088,29 @@ class FambaiOfflineStore {
         { name: data.origin.trim(), lat: -17.83, lng: 31.05 },
         { name: data.destination.trim(), lat: -17.84, lng: 31.04 },
       ],
+      createdByDeviceId: this.deviceId,
+      createdByUsername: this.getUsername(),
+      ownerUid: uid,
+      createdAt: now,
     };
 
-    // 1. Add route to local routes
     this.routes = [newRoute, ...this.routes];
     safeSet(STORAGE_KEYS.ROUTES, this.routes);
+    if (sqliteDb.isReady()) sqliteDb.upsertRecord('routes', newRoute.id, newRoute, now);
 
-    // 2. Add fare report with current transport type & departure status
-    const fareId = 'fare-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6);
+    const fareId = 'fare-' + now.toString(36) + '-' + Math.random().toString(36).substring(2, 6);
     const newFare: FareReport = {
       id: fareId,
       route_id: routeId,
       fare_amount: data.fareAmount,
       currency: data.currency,
-      reported_at: Date.now(),
+      reported_at: now,
       reporter_device_id: this.deviceId,
-      upvotes: 1,
+      ownerUid: uid,
+      reporter_username: this.getUsername(),
+      reporter_badge: this.getUserBadge(),
+      upvotes: 0,
       downvotes: 0,
-      userVote: 'up',
       source: 'user',
       transport_type: data.transportType,
       departure_status: data.departureStatus,
@@ -869,52 +2120,41 @@ class FambaiOfflineStore {
 
     this.fareReports = [newFare, ...this.fareReports];
     safeSet(STORAGE_KEYS.FARE_REPORTS, this.fareReports);
+    if (sqliteDb.isReady()) sqliteDb.upsertRecord('fare_reports', newFare.id, newFare, now);
     this.markReportTime(routeId);
+    this.toggleReactionRecord('fare', newFare.id, 'up');
 
-    // 3. Add initial status if provided
+    let newStatus: StatusReport | undefined;
     if (data.statusType) {
-      const statusId = 'status-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6);
-      const newStatus: StatusReport = {
+      const statusId = 'status-' + now.toString(36) + '-' + Math.random().toString(36).substring(2, 6);
+      newStatus = {
         id: statusId,
         route_id: routeId,
         type: data.statusType,
         note: data.note ? data.note.trim().slice(0, 100) : undefined,
-        reported_at: Date.now(),
-        expires_at: Date.now() + 90 * 60 * 1000,
+        reported_at: now,
+        expires_at: now + 90 * 60 * 1000,
         reporter_device_id: this.deviceId,
+        ownerUid: uid,
+        reporter_username: this.getUsername(),
         source: 'user',
       };
       this.statusReports = [newStatus, ...this.statusReports];
       safeSet(STORAGE_KEYS.STATUS_REPORTS, this.statusReports);
+      if (sqliteDb.isReady()) sqliteDb.upsertRecord('status_reports', newStatus.id, newStatus, now);
     }
 
-    // 4. Reward user profile
     this.userProfile.reports_count += 2;
     this.userProfile.reputation_score += 25;
-    safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    this.syncProfileToOutbox(false);
 
-    // 5. Outbox pending write
-    const pendingWrite: PendingWrite = {
-      id: 'outbox-route-' + Date.now().toString(36),
-      type: 'add_route',
-      payload: { route: newRoute, fare: newFare },
-      created_at: Date.now(),
-      retry_count: 0,
-      status: 'pending',
-    };
-    this.outbox = [pendingWrite, ...this.outbox];
-    safeSet(STORAGE_KEYS.OUTBOX_PENDING, this.outbox);
-
-    this.notifyChange();
-    this.flushOutbox();
-
-    return { route: newRoute, fare: newFare };
+    this.enqueueWrite('add_route', { route: newRoute, fare: newFare, status: newStatus }, true);
+    return { route: newRoute, fare: this.hydrateFareVote(newFare) };
   }
 
-  // Report Fare
   public reportFare(
-    routeId: string, 
-    amount: number, 
+    routeId: string,
+    amount: number,
     currency: Currency,
     transportType?: string,
     departureStatus?: string
@@ -927,19 +2167,21 @@ class FambaiOfflineStore {
       };
     }
 
+    const now = Date.now();
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
     const route = this.getRouteById(routeId);
     const newReport: FareReport = {
-      id: 'fare-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6),
+      id: 'fare-' + now.toString(36) + '-' + Math.random().toString(36).substring(2, 6),
       route_id: routeId,
       fare_amount: amount,
       currency,
-      reported_at: Date.now(),
+      reported_at: now,
       reporter_device_id: this.deviceId,
+      ownerUid: uid,
       reporter_username: this.getUsername(),
       reporter_badge: this.getUserBadge(),
-      upvotes: 1, // Self confirmation
+      upvotes: 0,
       downvotes: 0,
-      userVote: 'up',
       source: 'user',
       transport_type: transportType || route?.commonVehicle || 'Toyota HiAce Kombi',
       departure_status: departureStatus || 'Loading right now',
@@ -947,53 +2189,46 @@ class FambaiOfflineStore {
       city: route?.city,
     };
 
-    // 1. Optimistic Local SQLite/Cache update
     this.fareReports = [newReport, ...this.fareReports];
     safeSet(STORAGE_KEYS.FARE_REPORTS, this.fareReports);
+    if (sqliteDb.isReady()) sqliteDb.upsertRecord('fare_reports', newReport.id, newReport, now);
     this.markReportTime(routeId);
+    this.toggleReactionRecord('fare', newReport.id, 'up');
 
-    // Update user stats
     this.userProfile.reports_count += 1;
     this.userProfile.reputation_score += 5;
-    safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    this.syncProfileToOutbox(false);
 
-    // 2. Queue in Outbox table
-    const pendingWrite: PendingWrite = {
-      id: 'outbox-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6),
-      type: 'fare_report',
-      payload: newReport,
-      created_at: Date.now(),
-      retry_count: 0,
-      status: 'pending',
-    };
-    this.outbox = [pendingWrite, ...this.outbox];
-    safeSet(STORAGE_KEYS.OUTBOX_PENDING, this.outbox);
-
-    this.notifyChange();
-
-    // 3. Attempt silent background sync
-    this.flushOutbox();
-
+    this.enqueueWrite('fare_report', newReport, true);
     return { success: true };
   }
 
-  // Get all fare reports with route metadata, sorted strictly latest first
+  public deleteFareReport(fareId: string): boolean {
+    const fare = this.fareReports.find((f) => f.id === fareId);
+    if (!fare || !this.isOwnerOf(fare.ownerUid, fare.reporter_device_id)) return false;
+    this.fareReports = this.fareReports.filter((f) => f.id !== fareId);
+    safeSet(STORAGE_KEYS.FARE_REPORTS, this.fareReports);
+    if (sqliteDb.isReady()) sqliteDb.deleteRecord('fare_reports', fareId);
+    this.enqueueWrite('fare_delete', { id: fareId }, true);
+    this.notifyChange();
+    return true;
+  }
+
   public getAllFareReports(): FareReport[] {
     return this.fareReports
       .map((f) => {
         const route = this.getRouteById(f.route_id);
-        return {
+        return this.hydrateFareVote({
           ...f,
           route_name: f.route_name || route?.name || 'Commuter Route',
           city: f.city || route?.city || 'Harare',
           transport_type: f.transport_type || route?.commonVehicle || 'Toyota HiAce Kombi',
           departure_status: f.departure_status || 'In Transit / Loading',
-        };
+        });
       })
       .sort((a, b) => b.reported_at - a.reported_at);
   }
 
-  // Get all active status alerts, sorted strictly latest first
   public getAllStatusReports(): (StatusReport & { route_name?: string; city?: string })[] {
     const now = Date.now();
     return this.statusReports
@@ -1009,7 +2244,6 @@ class FambaiOfflineStore {
       .sort((a, b) => b.reported_at - a.reported_at);
   }
 
-  // Report Status
   public reportStatus(routeId: string, type: StatusType, note?: string): { success: boolean; error?: string } {
     const spamCheck = this.checkSpamLimit(routeId);
     if (!spamCheck.allowed) {
@@ -1019,141 +2253,160 @@ class FambaiOfflineStore {
       };
     }
 
+    const now = Date.now();
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
     const newStatus: StatusReport = {
-      id: 'status-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6),
+      id: 'status-' + now.toString(36) + '-' + Math.random().toString(36).substring(2, 6),
       route_id: routeId,
       type,
       note: note ? note.trim().slice(0, 100) : undefined,
-      reported_at: Date.now(),
-      expires_at: Date.now() + 90 * 60 * 1000, // 90 min expiration
+      reported_at: now,
+      expires_at: now + 90 * 60 * 1000,
       reporter_device_id: this.deviceId,
+      ownerUid: uid,
+      reporter_username: this.getUsername(),
       source: 'user',
     };
 
-    // 1. Optimistic update
     this.statusReports = [newStatus, ...this.statusReports];
     safeSet(STORAGE_KEYS.STATUS_REPORTS, this.statusReports);
+    if (sqliteDb.isReady()) sqliteDb.upsertRecord('status_reports', newStatus.id, newStatus, now);
     this.markReportTime(routeId);
 
-    // Update user stats
     this.userProfile.reports_count += 1;
     this.userProfile.reputation_score += 5;
-    safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    this.syncProfileToOutbox(false);
 
-    // 2. Queue in Outbox
-    const pendingWrite: PendingWrite = {
-      id: 'outbox-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6),
-      type: 'status_report',
-      payload: newStatus,
-      created_at: Date.now(),
-      retry_count: 0,
-      status: 'pending',
-    };
-    this.outbox = [pendingWrite, ...this.outbox];
-    safeSet(STORAGE_KEYS.OUTBOX_PENDING, this.outbox);
-
-    this.notifyChange();
-
-    // 3. Silent background sync
-    this.flushOutbox();
-
+    this.enqueueWrite('status_report', newStatus, true);
     return { success: true };
   }
 
-  // Upvote or downvote a fare
+  public deleteStatusReport(statusId: string): boolean {
+    const st = this.statusReports.find((s) => s.id === statusId);
+    if (!st || !this.isOwnerOf(st.ownerUid, st.reporter_device_id)) return false;
+    this.statusReports = this.statusReports.filter((s) => s.id !== statusId);
+    safeSet(STORAGE_KEYS.STATUS_REPORTS, this.statusReports);
+    if (sqliteDb.isReady()) sqliteDb.deleteRecord('status_reports', statusId);
+    this.enqueueWrite('status_delete', { id: statusId }, true);
+    this.notifyChange();
+    return true;
+  }
+
   public voteFare(fareId: string, voteType: 'up' | 'down'): void {
     const fare = this.fareReports.find((f) => f.id === fareId);
     if (!fare) return;
-
-    const prevVote = fare.userVote;
-    if (prevVote === voteType) return; // Already voted this way
-
-    if (prevVote === 'up') fare.upvotes = Math.max(0, fare.upvotes - 1);
-    if (prevVote === 'down') fare.downvotes = Math.max(0, fare.downvotes - 1);
-
-    if (voteType === 'up') fare.upvotes += 1;
-    if (voteType === 'down') fare.downvotes += 1;
-    fare.userVote = voteType;
-
-    safeSet(STORAGE_KEYS.FARE_REPORTS, this.fareReports);
-
-    // Queue in outbox
-    const pendingWrite: PendingWrite = {
-      id: 'outbox-vote-' + Date.now(),
-      type: 'fare_vote',
-      payload: { fareId, voteType, deviceId: this.deviceId },
-      created_at: Date.now(),
-      retry_count: 0,
-      status: 'pending',
-    };
-    this.outbox = [pendingWrite, ...this.outbox];
-    safeSet(STORAGE_KEYS.OUTBOX_PENDING, this.outbox);
-
-    this.notifyChange();
-    this.flushOutbox();
+    this.toggleReactionRecord('fare', fareId, voteType);
   }
 
-  // Background Outbox Sync worker (silent, non-blocking)
-  public async flushOutbox(): Promise<void> {
-    if (this.isSyncing) return;
-    if (!this.isEffectivelyOnline()) {
-      return; // Stay queued in local store until connectivity returns
-    }
+  // --- CLOUD SYNC & OUTBOX FLUSH ---
+  public async flushOutbox(): Promise<number> {
+    if (this.isSyncing) return 0;
+    if (!this.isEffectivelyOnline()) return 0;
 
-    const pending = this.outbox.filter((w) => w.status === 'pending' || w.status === 'failed');
-    if (pending.length === 0) return;
+    const pending = this.outbox.filter(
+      (w) => w.status === 'pending' || w.status === 'failed'
+    );
+    if (pending.length === 0) return 0;
 
     this.isSyncing = true;
+    this.lastSyncError = null;
     this.notifyChange();
 
-    for (const item of pending) {
-      item.status = 'syncing';
-      try {
-        // Simulating cloud / Firestore synchronization with backoff
-        await new Promise((resolve) => setTimeout(resolve, 350));
+    let pushedCount = 0;
+    const ordered = [...pending].reverse();
 
-        if (!this.isEffectivelyOnline()) {
-          item.status = 'failed';
-          item.retry_count += 1;
-          break;
-        }
-
-        item.status = 'synced';
-      } catch (err: any) {
+    for (const item of ordered) {
+      if (!this.isEffectivelyOnline()) {
         item.status = 'failed';
         item.retry_count += 1;
-        item.error = err?.message || 'Sync failed';
+        break;
+      }
+
+      item.status = 'syncing';
+      try {
+        await pushPendingWriteToCloud(item);
+        item.status = 'synced';
+        pushedCount += 1;
+      } catch (err: any) {
+        const msg = err?.message || 'Cloud sync error';
+        if (msg.includes('Sign in required')) {
+          item.status = 'pending';
+          item.error = msg;
+          this.lastSyncError = msg;
+          break;
+        }
+        item.status = 'failed';
+        item.retry_count += 1;
+        item.error = msg;
+        this.lastSyncError = msg;
       }
     }
 
-    // Retain only last 20 synced for history in My Reports, purge older synced
     const activePending = this.outbox.filter((w) => w.status !== 'synced');
     const recentSynced = this.outbox.filter((w) => w.status === 'synced').slice(0, 20);
     this.outbox = [...activePending, ...recentSynced];
     safeSet(STORAGE_KEYS.OUTBOX_PENDING, this.outbox);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('outbox_pending', this.outbox);
+
+    if (pushedCount > 0) {
+      this.cloudConnected = true;
+      this.lastSyncedAt = Date.now();
+      safeSet(STORAGE_KEYS.LAST_SYNCED_AT, this.lastSyncedAt);
+    }
 
     this.isSyncing = false;
     this.notifyChange();
+    return pushedCount;
+  }
+
+  public async globalSyncNow(): Promise<{ pushed: number; pulled: boolean; error?: string }> {
+    if (!this.isEffectivelyOnline()) {
+      return {
+        pushed: 0,
+        pulled: false,
+        error: 'Device is offline. Changes are saved safely in local SQLite and will auto-sync once connected.',
+      };
+    }
+
+    let pushed = 0;
+    try {
+      await ensureCloudAuth();
+      pushed = await this.flushOutbox();
+      this.isSyncing = true;
+      this.notifyChange();
+
+      const snapshot = await pullAllFromCloud(this.deviceId);
+      this.applyCloudSnapshot(snapshot);
+      this.attachCloudListeners();
+
+      this.isSyncing = false;
+      this.notifyChange();
+      return { pushed, pulled: true, error: this.lastSyncError || undefined };
+    } catch (err: any) {
+      this.isSyncing = false;
+      this.lastSyncError = err?.message || 'Unable to reach cloud database';
+      this.notifyChange();
+      return { pushed, pulled: false, error: this.lastSyncError || undefined };
+    }
   }
 
   private startBackgroundSync(): void {
     if (this.syncTimer) clearInterval(this.syncTimer);
-    // Silent periodic background check every 25 seconds
     this.syncTimer = setInterval(() => {
       if (this.getPendingWritesCount() > 0 && this.isEffectivelyOnline()) {
         this.flushOutbox();
       }
-    }, 25000);
+    }, 15000);
   }
 
-  // Get device report history
   public getMyReports(): { fares: FareReport[]; statuses: StatusReport[] } {
-    const myFares = this.fareReports.filter((f) => f.reporter_device_id === this.deviceId);
-    const myStatuses = this.statusReports.filter((s) => s.reporter_device_id === this.deviceId);
+    const myFares = this.fareReports
+      .filter((f) => this.isOwnerOf(f.ownerUid, f.reporter_device_id))
+      .map((f) => this.hydrateFareVote(f));
+    const myStatuses = this.statusReports.filter((s) => this.isOwnerOf(s.ownerUid, s.reporter_device_id));
     return { fares: myFares, statuses: myStatuses };
   }
 
-  // Reset data to clean production state
   public resetToSeed(): void {
     localStorage.removeItem(STORAGE_KEYS.ROUTES);
     localStorage.removeItem(STORAGE_KEYS.RANKS);
@@ -1164,7 +2417,15 @@ class FambaiOfflineStore {
     localStorage.removeItem(STORAGE_KEYS.LAST_REPORTS_BY_ROUTE);
     localStorage.removeItem(STORAGE_KEYS.TRANSPORTERS);
     localStorage.removeItem(STORAGE_KEYS.SOCIAL_INTERACTIONS);
+    localStorage.removeItem(STORAGE_KEYS.SOCIAL_REPLIES);
+    localStorage.removeItem(STORAGE_KEYS.SOCIAL_REACTIONS);
+    localStorage.removeItem(STORAGE_KEYS.NOTIFICATIONS);
+    localStorage.removeItem(STORAGE_KEYS.BOARDING_CONFIRMATIONS);
+    localStorage.removeItem(STORAGE_KEYS.COMMUTERS_DIRECTORY);
+    localStorage.removeItem(STORAGE_KEYS.LOCATION_ANCHORS);
+    sqliteDb.clearAllUserTables();
     this.initFromLocalCache();
+    this.ensureLocalUserInDirectory();
     this.notifyChange();
   }
 }

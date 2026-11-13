@@ -42,9 +42,11 @@ export default function App() {
           <div className="bg-[#141414] text-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_#F27D26] p-4 sm:p-5 relative overflow-hidden">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-start gap-3.5">
-                <div className="w-10 h-10 bg-[#F27D26] text-white border-2 border-[#141414] flex items-center justify-center font-black flex-shrink-0 mt-0.5 shadow-[2px_2px_0px_0px_#ffffff]">
-                  <Bus className="w-5 h-5 text-white" />
-                </div>
+                <img
+                  src="/pwa-192x192.png"
+                  alt="Fambai Travel 3D Kombi"
+                  className="w-10 h-10 object-cover border-2 border-[#141414] flex-shrink-0 mt-0.5 shadow-[2px_2px_0px_0px_#ffffff] bg-[#141414]"
+                />
                 <div className="space-y-1">
                   <div className="flex flex-wrap items-baseline gap-2">
                     <span className="text-base sm:text-lg font-black tracking-tight text-white uppercase">
@@ -55,7 +57,7 @@ export default function App() {
                     </span>
                   </div>
                   <p className="text-xs sm:text-sm font-medium text-stone-300 leading-snug max-w-2xl">
-                    Crowdsourced transit intelligence for Zimbabwe. Instant cached load, live multi-currency fares (USD, ZiG, Rand, Pula), verified transporters &amp; kombis, coach amenities &amp; abuse reports, GPS terminus finder, and police blitz alerts.
+                    Crowdsourced transit intelligence for Zimbabwe. Instant offline SQLite &amp; cloud sync, live 3-currency fares (USD, ZWG, ZAR), one-tap boarding check-ins, verified transporters &amp; kombis, and community reviews.
                   </p>
                 </div>
               </div>

@@ -21,15 +21,16 @@ import {
   Coins
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
-import { Currency, AbuseCategory, AmenityFeedback } from '../types';
+import { Currency, AbuseCategory, AmenityFeedback, SocialPostType, SocialTargetType } from '../types';
 
 interface AddReviewAbuseModalProps {
   isOpen: boolean;
   onClose: () => void;
-  targetType: 'route' | 'intercity' | 'operator' | 'transporter' | 'rank';
+  targetType: SocialTargetType;
   targetId: string;
   targetName: string;
   isIntercity?: boolean;
+  allowTargetSelection?: boolean;
   onSuccess?: () => void;
 }
 
@@ -51,13 +52,27 @@ export const AddReviewAbuseModal: React.FC<AddReviewAbuseModalProps> = ({
   targetId,
   targetName,
   isIntercity = false,
+  allowTargetSelection = false,
   onSuccess,
 }) => {
   const store = useOfflineStore();
   const username = store.getUsername();
 
+  const [selectedType, setSelectedType] = useState<SocialTargetType>(targetType);
+  const [selectedId, setSelectedId] = useState<string>(targetId);
+  const [selectedName, setSelectedName] = useState<string>(targetName);
+
+  // Entity lists for optional target selection
+  const routesList = store.getRoutes();
+  const ranksList = store.getRanks();
+  const transportersList = store.getTransporters();
+  const operatorsList = store.getBusOperators();
+  const intercityList = store.getIntercityRoutes();
+  const commutersList = store.getCommutersDirectory();
+
   // Mode: 'review' | 'abuse' | 'amenities'
   const [activeTab, setActiveTab] = useState<'review' | 'abuse' | 'amenities'>('review');
+  const [postType, setPostType] = useState<SocialPostType>('review');
 
   // Review states
   const [rating, setRating] = useState<number>(5);
@@ -86,6 +101,36 @@ export const AddReviewAbuseModal: React.FC<AddReviewAbuseModalProps> = ({
 
   if (!isOpen) return null;
 
+  const getEntitiesForType = (t: SocialTargetType): { id: string; name: string }[] => {
+    switch (t) {
+      case 'rank':
+        return ranksList.map(r => ({ id: r.id, name: `${r.name} (${r.city})` }));
+      case 'transporter':
+        return transportersList.map(tr => ({ id: tr.id, name: `${tr.operatorName} (${tr.city})` }));
+      case 'operator':
+        return operatorsList.map(op => ({ id: op.id, name: op.name }));
+      case 'intercity':
+        return intercityList.map(ic => ({ id: ic.id, name: ic.name }));
+      case 'commuter':
+        return commutersList.map(c => ({ id: c.device_id, name: `${c.username} (${c.handle})` }));
+      case 'route':
+      default:
+        return routesList.map(rt => ({ id: rt.id, name: `${rt.name} (${rt.city})` }));
+    }
+  };
+
+  const handleCategorySwitch = (newType: SocialTargetType) => {
+    setSelectedType(newType);
+    const entities = getEntitiesForType(newType);
+    if (entities.length > 0) {
+      setSelectedId(entities[0].id);
+      setSelectedName(entities[0].name);
+    } else {
+      setSelectedId('general');
+      setSelectedName(`Zimbabwe ${newType}`);
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!comment.trim() && activeTab !== 'abuse') return;
@@ -98,10 +143,15 @@ export const AddReviewAbuseModal: React.FC<AddReviewAbuseModalProps> = ({
       }
     }
 
+    const effectiveType = allowTargetSelection ? selectedType : targetType;
+    const effectiveId = allowTargetSelection ? selectedId : targetId;
+    const effectiveName = allowTargetSelection ? selectedName : targetName;
+
     store.addSocialInteraction({
-      targetType,
-      targetId,
-      targetName,
+      targetType: effectiveType,
+      targetId: effectiveId,
+      targetName: effectiveName,
+      postType: activeTab === 'abuse' ? 'abuse' : postType,
       comment: comment.trim() || (activeTab === 'abuse' ? `Abuse reported: ${abuseType}` : 'Verified service experience.'),
       rating: activeTab === 'abuse' ? 1 : rating,
       confirmedFare: confirmedFareData,
@@ -134,7 +184,9 @@ export const AddReviewAbuseModal: React.FC<AddReviewAbuseModalProps> = ({
               <span className="text-[10px] font-black text-[#F27D26] uppercase tracking-widest">Commuter Community</span>
               <span className="text-[10px] text-stone-400 font-bold">• Posting as {username}</span>
             </div>
-            <h3 className="text-base font-black text-white uppercase truncate">{targetName}</h3>
+            <h3 className="text-base font-black text-white uppercase truncate">
+              {allowTargetSelection ? selectedName : targetName}
+            </h3>
           </div>
           <button
             onClick={onClose}
@@ -200,6 +252,63 @@ export const AddReviewAbuseModal: React.FC<AddReviewAbuseModalProps> = ({
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
+            {allowTargetSelection && (
+              <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414] space-y-2.5">
+                <div>
+                  <label className="block text-[10px] font-black text-[#141414] uppercase tracking-wider mb-1">
+                    Rate / Comment Category
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {([
+                      { id: 'rank', label: 'Bus Terminus' },
+                      { id: 'transporter', label: 'Transporter' },
+                      { id: 'route', label: 'Local Route' },
+                      { id: 'operator', label: 'Coach Fleet' },
+                      { id: 'intercity', label: 'Intercity' },
+                      { id: 'commuter', label: 'Commuter / User' },
+                    ] as { id: SocialTargetType; label: string }[]).map((cat) => (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => handleCategorySwitch(cat.id)}
+                        className={`py-1.5 px-2 text-[10px] font-black uppercase border-2 border-[#141414] cursor-pointer transition ${
+                          selectedType === cat.id
+                            ? 'bg-[#141414] text-[#F27D26] shadow-[2px_2px_0px_0px_#F27D26]'
+                            : 'bg-white text-[#141414] hover:bg-stone-100'
+                        }`}
+                      >
+                        {cat.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-[#141414] uppercase tracking-wider mb-1">
+                    Select Specific Terminus / Transporter / User / Route
+                  </label>
+                  <select
+                    value={selectedId}
+                    onChange={(e) => {
+                      const entities = getEntitiesForType(selectedType);
+                      const found = entities.find(item => item.id === e.target.value);
+                      setSelectedId(e.target.value);
+                      setSelectedName(found?.name || e.target.value);
+                    }}
+                    className="w-full p-2 bg-white border-2 border-[#141414] text-xs font-black text-[#141414]"
+                  >
+                    {getEntitiesForType(selectedType).length === 0 ? (
+                      <option value="general">General Community Feedback</option>
+                    ) : (
+                      getEntitiesForType(selectedType).map((ent) => (
+                        <option key={ent.id} value={ent.id}>{ent.name}</option>
+                      ))
+                    )}
+                  </select>
+                </div>
+              </div>
+            )}
+
             {/* TAB 1: REVIEW & FARE CONFIRMATION */}
             {activeTab === 'review' && (
               <>
@@ -254,24 +363,23 @@ export const AddReviewAbuseModal: React.FC<AddReviewAbuseModalProps> = ({
                   {confirmingFare && (
                     <div className="space-y-3 pt-2 border-t border-stone-300">
                       <div>
-                        <label className="block text-[10px] font-black text-stone-600 uppercase mb-1">Currency</label>
-                        <div className="grid grid-cols-4 gap-1.5">
-                          {(['USD', 'ZWL', 'ZAR', 'BWP'] as Currency[]).map((curr) => (
+                        <label className="block text-[10px] font-black text-stone-600 uppercase mb-1">Currency (USD • ZWG • ZAR)</label>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {(['USD', 'ZWG', 'ZAR'] as Currency[]).map((curr) => (
                             <button
                               key={curr}
                               type="button"
                               onClick={() => {
                                 setCurrency(curr);
                                 if (curr === 'USD') setFareAmount('1.00');
-                                if (curr === 'ZWL') setFareAmount('25');
+                                if (curr === 'ZWG') setFareAmount('28');
                                 if (curr === 'ZAR') setFareAmount('20');
-                                if (curr === 'BWP') setFareAmount('20');
                               }}
                               className={`py-1.5 text-xs font-black uppercase border-2 border-[#141414] transition cursor-pointer ${
                                 currency === curr ? 'bg-[#141414] text-white shadow-[2px_2px_0px_0px_#F27D26]' : 'bg-white text-[#141414]'
                               }`}
                             >
-                              {curr === 'USD' ? '$ USD' : curr === 'ZWL' ? 'ZiG' : curr === 'ZAR' ? 'R Rand' : 'P Pula'}
+                              {curr === 'USD' ? '$ USD' : curr === 'ZWG' ? 'ZWG' : 'R ZAR'}
                             </button>
                           ))}
                         </div>
@@ -303,19 +411,64 @@ export const AddReviewAbuseModal: React.FC<AddReviewAbuseModalProps> = ({
                   )}
                 </div>
 
-                {/* Comment */}
+                {/* Post Type Selector */}
+                <div>
+                  <label className="block text-[10px] font-black text-[#141414] uppercase tracking-wider mb-1">
+                    Post Format
+                  </label>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {([
+                      { id: 'review', label: 'Review' },
+                      { id: 'conversation', label: 'Conversation' },
+                      { id: 'question', label: 'Question' },
+                      { id: 'recommendation', label: 'Recommend' },
+                    ] as { id: SocialPostType; label: string }[]).map((pt) => (
+                      <button
+                        key={pt.id}
+                        type="button"
+                        onClick={() => setPostType(pt.id)}
+                        className={`py-1.5 px-1 text-[10px] font-black uppercase border-2 border-[#141414] cursor-pointer transition ${
+                          postType === pt.id
+                            ? 'bg-[#141414] text-[#F27D26]'
+                            : 'bg-[#F5F5F0] text-[#141414] hover:bg-white'
+                        }`}
+                      >
+                        {pt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Comment & @Tag Commuters */}
                 <div>
                   <label className="block text-xs font-black text-[#141414] uppercase tracking-wider mb-1">
-                    Commuter Review &amp; Comments
+                    Commuter Review, Question or Tag (@handle)
                   </label>
                   <textarea
                     rows={3}
                     value={comment}
                     onChange={(e) => setComment(e.target.value)}
-                    placeholder="Share helpful details: driver conduct, loading speed, route diversions, seat comfort, luggage handling..."
+                    placeholder="Share helpful details, ask a question, recommend a location/fare, or @tag another commuter..."
                     required
                     className="w-full bg-white border-2 border-[#141414] p-2.5 text-xs font-bold text-[#141414] focus:outline-none focus:ring-2 focus:ring-[#F27D26]"
                   />
+                  {commutersList.length > 0 && (
+                    <div className="mt-1.5 flex items-center gap-1 flex-wrap">
+                      <span className="text-[10px] font-black uppercase text-stone-500">Quick @Tag:</span>
+                      {commutersList.slice(0, 6).map((c) => (
+                        <button
+                          key={c.device_id}
+                          type="button"
+                          onClick={() =>
+                            setComment((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${c.handle} `)
+                          }
+                          className="px-1.5 py-0.5 bg-[#F5F5F0] hover:bg-[#141414] hover:text-[#F27D26] border border-[#141414] text-[10px] font-black cursor-pointer transition"
+                        >
+                          {c.handle}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </>
             )}

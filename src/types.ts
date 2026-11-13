@@ -1,4 +1,5 @@
-export type Currency = 'USD' | 'ZWL' | 'ZAR' | 'BWP';
+export type Currency = 'USD' | 'ZWG' | 'ZAR' | 'ZWL' | 'BWP';
+export type DisplayCurrency = 'USD' | 'ZWG' | 'ZAR';
 
 export type StatusType = 
   | 'running'
@@ -22,12 +23,16 @@ export interface RouteItem {
   origin: string;
   destination: string;
   waypoints: Waypoint[];
-  city: string; // e.g. "Harare", "Bulawayo", "Gweru", "Kwekwe", "Mutare", "Kadoma", "Masvingo", "Marondera", "Bindura", "Gwanda", "Plumtree"
+  city: string; // e.g. "Harare", "Bulawayo", "Gweru", etc.
   province?: string;
-  category?: RouteCategory; // 'cbd_location' (CBD to locations/suburbs) or 'near_town' (inter-urban / near town transport)
+  category?: RouteCategory;
   distanceKm?: number;
-  commonVehicle?: string; // e.g. "Toyota HiAce Kombi", "Sprinter", "Mushikashika (Wish/Sienta)"
+  commonVehicle?: string;
   ranksServedIds: string[];
+  createdByDeviceId?: string;
+  createdByUsername?: string;
+  ownerUid?: string;
+  createdAt?: number;
 }
 
 export type TransporterVehicleType = 
@@ -46,16 +51,17 @@ export interface TransporterProfile {
   contactPhone: string; // Phone number with WhatsApp capability
   transportType: TransporterVehicleType;
   transportTypeLabel: string; // Readable label
-  currentRouteName: string; // Route they always serve (e.g. "Bulawayo CBD ⇄ Cowdray Park")
+  currentRouteName: string; // Route they always serve
   currentRouteId?: string;
   city: string;
   vehiclePlate?: string; // e.g. "AEK 3942"
-  baseTerminus?: string; // e.g. "Egodini Rank", "Copacabana", "Plumtree Rank"
+  baseTerminus?: string; // e.g. "Egodini Rank", "Copacabana"
   status: 'active' | 'loading' | 'available_hire' | 'off_duty';
   statusNote?: string;
   registeredAt: number;
   lastRouteUpdate: number;
   registeredByDeviceId: string;
+  ownerUid?: string;
   username?: string;
   userHandle?: string;
   likes: number;
@@ -74,25 +80,31 @@ export type AbuseCategory =
   | 'poor_cleanliness';
 
 export interface AmenityFeedback {
-  ac?: boolean; // Air conditioning
-  usb?: boolean; // USB charging
-  wifi?: boolean; // On-board Wi-Fi
-  reclining?: boolean; // Reclining seats
-  luggage?: boolean; // Secure luggage
-  toilet?: boolean; // On-board restroom
-  refreshments?: boolean; // Water / Refreshments
-  tv?: boolean; // Entertainment screen
+  ac?: boolean;
+  usb?: boolean;
+  wifi?: boolean;
+  reclining?: boolean;
+  luggage?: boolean;
+  toilet?: boolean;
+  refreshments?: boolean;
+  tv?: boolean;
   acWorking?: boolean;
   usbCharging?: boolean;
   wifiWorking?: boolean;
   luggageSecurity?: boolean;
+  cleanliness?: number;
+  punctuality?: number;
 }
+
+export type SocialTargetType = 'route' | 'intercity' | 'operator' | 'rank' | 'transporter' | 'commuter';
+export type SocialPostType = 'conversation' | 'question' | 'recommendation' | 'review' | 'abuse';
 
 export interface CommuterSocialInteraction {
   id: string;
-  targetType: 'route' | 'intercity' | 'operator' | 'rank' | 'transporter';
+  targetType: SocialTargetType;
   targetId: string;
   targetName: string;
+  postType?: SocialPostType;
   username: string;
   userHandle: string;
   userBadge: string;
@@ -103,14 +115,20 @@ export interface CommuterSocialInteraction {
   dislikes: number;
   userReaction?: 'like' | 'dislike';
   createdAt: number;
+  updatedAt?: number;
   deviceId: string;
+  ownerUid?: string;
+  mentionedHandles?: string[];
+  mentionedDeviceIds?: string[];
+  recommendedLocation?: string;
+  recommendedCommuterUsername?: string;
   
   // Optional enrichments
   confirmedFare?: {
     amount: number;
     currency: Currency;
   };
-  confirmedDepartureTime?: string; // e.g. "07:15 AM - Departed on time"
+  confirmedDepartureTime?: string;
   amenitiesReview?: AmenityFeedback;
   isAbuseReport?: boolean;
   abuseType?: AbuseCategory;
@@ -118,13 +136,94 @@ export interface CommuterSocialInteraction {
   abusePlateNumber?: string;
 }
 
+export interface SocialReply {
+  id: string;
+  interactionId: string;
+  parentAuthorDeviceId?: string;
+  parentAuthorUsername?: string;
+  deviceId: string;
+  ownerUid?: string;
+  username: string;
+  userHandle: string;
+  userBadge: string;
+  avatarBg: string;
+  comment: string;
+  mentionedHandles?: string[];
+  mentionedDeviceIds?: string[];
+  createdAt: number;
+  updatedAt?: number;
+}
+
+export type ReactionTargetType = 'fare' | 'intercity' | 'transporter' | 'social';
+
+export interface SocialReactionRecord {
+  id: string; // `${targetType}_${targetId}_${deviceId}`
+  targetType: ReactionTargetType;
+  targetId: string;
+  reaction: 'up' | 'down' | 'like' | 'dislike';
+  deviceId: string;
+  ownerUid?: string;
+  username?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type NotificationType = 'reply' | 'tag' | 'like' | 'rating';
+
+export interface CommuterNotification {
+  id: string;
+  type: NotificationType;
+  recipientDeviceId: string;
+  recipientUid?: string;
+  senderDeviceId: string;
+  senderUid?: string;
+  senderUsername: string;
+  senderHandle: string;
+  targetType: string;
+  targetId: string;
+  postId?: string;
+  snippet: string;
+  read: boolean;
+  createdAt: number;
+}
+
+export interface BoardingConfirmation {
+  id: string;
+  rankId: string;
+  rankName: string;
+  city: string;
+  deviceId: string;
+  ownerUid?: string;
+  username: string;
+  userHandle: string;
+  statement: string; // e.g. "I boarded here"
+  lat?: number;
+  lng?: number;
+  locationSource?: 'gps' | 'preset' | 'manual';
+  createdAt: number;
+}
+
+export interface LocationAnchor {
+  deviceId: string;
+  ownerUid?: string;
+  username: string;
+  lat: number;
+  lng: number;
+  name: string;
+  source: 'gps' | 'preset' | 'manual';
+  accuracyMeters?: number;
+  nearestRankId?: string;
+  nearestRankName?: string;
+  timestamp: number;
+}
+
 export type TransportType = 
-  | 'kombi_15' // Toyota HiAce Kombi (15-seater)
-  | 'coaster_minibus' // Minibus / Coaster (18-24 seater)
-  | 'zupco_bus' // ZUPCO Conventional Big Bus (65-75 seater)
-  | 'mushikashika_sedan' // Mushikashika (Wish / Sienta / Ipsum)
-  | 'metered_taxi' // Metered City Taxi / Cab
-  | 'intercity_coach'; // Long-distance Coach (CAG, Inter Africa, City Link)
+  | 'kombi_15'
+  | 'coaster_minibus'
+  | 'zupco_bus'
+  | 'mushikashika_sedan'
+  | 'metered_taxi'
+  | 'intercity_coach';
 
 export interface UserLocation {
   lat: number;
@@ -140,14 +239,15 @@ export interface FareReport {
   route_id: string;
   fare_amount: number;
   currency: Currency;
-  reported_at: number; // unix timestamp ms
+  reported_at: number;
   reporter_device_id: string;
+  ownerUid?: string;
   upvotes: number;
   downvotes: number;
   userVote?: 'up' | 'down';
   source?: 'seeded' | 'user' | 'peer';
-  transport_type?: string; // e.g. "Toyota HiAce Kombi", "Mushikashika (Wish)", "ZUPCO Big Bus"
-  departure_status?: string; // e.g. "Loading now / Depart in 5 mins", "Full & Leaving"
+  transport_type?: string;
+  departure_status?: string;
   route_name?: string;
   city?: string;
   reporter_username?: string;
@@ -158,20 +258,21 @@ export interface StatusReport {
   id: string;
   route_id: string;
   type: StatusType;
-  note?: string; // max 100 chars
-  reported_at: number; // unix timestamp ms
-  expires_at: number; // default 90 min from report
+  note?: string;
+  reported_at: number;
+  expires_at: number;
   reporter_device_id: string;
+  ownerUid?: string;
   reporter_username?: string;
   source?: 'seeded' | 'user' | 'peer';
 }
 
 export interface Rank {
   id: string;
-  name: string; // e.g. "Mbare Musika"
+  name: string;
   lat: number;
   lng: number;
-  routes_served: string[]; // route ids
+  routes_served: string[];
   city: string;
   address?: string;
   kombiTypes?: string;
@@ -180,23 +281,26 @@ export interface Rank {
 
 export interface UserProfile {
   device_id: string;
-  name?: string; // e.g. "Farai Moyo"
-  username: string; // e.g. "Tinashe_Zw"
-  handle: string; // e.g. "@tinashe_zw"
-  avatarColor: string; // Hex color for avatar
-  commuterBadge: string; // e.g. "Daily Commuter", "Route Scout", "Transporter"
+  userId?: string;
+  ownerUid?: string;
+  name?: string;
+  username: string;
+  handle: string;
+  avatarColor: string;
+  commuterBadge: string;
   role: 'commuter' | 'transporter';
   phone?: string;
   reputation_score: number;
   reports_count: number;
   createdAt: number;
+  updatedAt?: number;
 }
 
 export type OperatorTier = 'luxury' | 'semi_luxury' | 'standard';
 
 export interface BusOperator {
   id: string;
-  name: string; // e.g. "CAG Travellers Coaches", "City Link", "Inter Africa"
+  name: string;
   alias?: string;
   tier: OperatorTier;
   headquarters: string;
@@ -216,20 +320,20 @@ export interface IntercityOperatorService {
   tier: OperatorTier;
   fareUSD: number;
   fareZiG?: number;
-  typicalDepartures: string[]; // e.g. ["06:30 AM", "08:00 AM", "14:00 PM"]
-  departureHub: string; // e.g. "Harare Roadport Terminal"
+  typicalDepartures: string[];
+  departureHub: string;
   amenities: string[];
-  reliabilityScore: number; // e.g. 96
+  reliabilityScore: number;
 }
 
 export interface IntercityRoute {
   id: string;
-  name: string; // e.g. "Harare ⇄ Bulawayo Express"
+  name: string;
   originCity: string;
   destinationCity: string;
   distanceKm: number;
   estimatedDurationHours: number;
-  highwayCode: string; // e.g. "A5 (Robert Mugabe Hwy)"
+  highwayCode: string;
   keyStops: string[];
   departureHubs: { city: string; terminal: string }[];
   operators: IntercityOperatorService[];
@@ -244,21 +348,54 @@ export interface IntercityReport {
   operatorName: string;
   farePaidUSD: number;
   farePaidZiG?: number;
+  farePaidZAR?: number;
   departureTime?: string;
   departureTerminal: string;
   seatAvailability: 'plenty' | 'filling_fast' | 'full';
-  busConditionRating: number; // 1-5
+  busConditionRating: number;
   roadStatusNote?: string;
   reportedAt: number;
   reporterDeviceId: string;
+  ownerUid?: string;
+  reporterUsername?: string;
   upvotes: number;
   downvotes: number;
   userVote?: 'up' | 'down';
 }
 
+export type PendingWriteType =
+  | 'fare_report'
+  | 'fare_delete'
+  | 'status_report'
+  | 'status_delete'
+  | 'fare_vote'
+  | 'intercity_report'
+  | 'intercity_delete'
+  | 'intercity_vote'
+  | 'add_route'
+  | 'transporter_register'
+  | 'transporter_update'
+  | 'transporter_delete'
+  | 'transporter_like'
+  | 'social_interaction'
+  | 'social_interaction_edit'
+  | 'social_interaction_delete'
+  | 'social_reaction'
+  | 'social_reaction_record'
+  | 'social_reaction_delete'
+  | 'social_reply'
+  | 'social_reply_edit'
+  | 'social_reply_delete'
+  | 'notification_create'
+  | 'notification_update'
+  | 'boarding_confirmation'
+  | 'profile_update'
+  | 'private_profile_update'
+  | 'location_anchor';
+
 export interface PendingWrite {
   id: string;
-  type: 'fare_report' | 'status_report' | 'fare_vote' | 'intercity_report' | 'add_route';
+  type: PendingWriteType;
   payload: any;
   created_at: number;
   retry_count: number;
@@ -277,4 +414,15 @@ export interface ActiveRouteSummary {
   averageFareZWL?: number;
   averageFareZAR?: number;
   averageFareBWP?: number;
+}
+
+export interface SyncStatusInfo {
+  isSyncing: boolean;
+  lastSyncedAt: number | null;
+  lastSyncError: string | null;
+  cloudConnected: boolean;
+  sqliteReady: boolean;
+  sqliteRowCount: number;
+  authReady?: boolean;
+  authUid?: string | null;
 }

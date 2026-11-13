@@ -18,13 +18,17 @@ import {
   Share2, 
   ArrowRight,
   Info,
-  Car
+  Car,
+  Star,
+  MessageSquare,
+  Users
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
 import { RouteItem } from '../types';
-import { formatTimeAgo, formatCurrency, getStatusConfig } from '../utils/formatters';
+import { formatTimeAgo, formatCurrency, formatDisplayFare, getStatusConfig } from '../utils/formatters';
 import { ReportFareModal } from './ReportFareModal';
 import { ReportStatusModal } from './ReportStatusModal';
+import { AddReviewAbuseModal } from './AddReviewAbuseModal';
 
 interface RouteDetailModalProps {
   routeId: string;
@@ -42,9 +46,13 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
   const store = useOfflineStore();
   const summary = store.getRouteSummary(routeId);
   const ranks = store.getRanks();
+  const displayCurrency = store.getDisplayCurrency();
+  const routeRating = store.getRatingSummaryForTarget('route', routeId);
 
   const [isReportFareOpen, setIsReportFareOpen] = useState(false);
   const [isReportStatusOpen, setIsReportStatusOpen] = useState(false);
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [boardedRankId, setBoardedRankId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   if (!isOpen || !summary) return null;
@@ -54,7 +62,7 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
 
   const handleShare = () => {
     const text = `Fambai/Hambani Travel Zimbabwe: ${route.name} (${route.city}) current fare is ${
-      latestFare ? formatCurrency(latestFare.fare_amount, latestFare.currency) : 'not reported'
+      latestFare ? formatDisplayFare(latestFare.fare_amount, latestFare.currency, displayCurrency) : 'not reported'
     }. Status: ${summary.latestStatus ? summary.latestStatus.type : 'Running'}.`;
     
     if (navigator.clipboard) {
@@ -133,13 +141,13 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
                   <span className="text-[10px] font-black uppercase tracking-widest text-[#F27D26]">Current Commuter Fare</span>
                   {latestFare ? (
                     <div>
-                      <div className="flex items-baseline gap-2 mt-0.5">
+                      <div className="flex items-baseline gap-2 mt-0.5 flex-wrap">
                         <span className="text-3xl sm:text-4xl font-black text-[#141414] tracking-tight">
-                          {formatCurrency(latestFare.fare_amount, latestFare.currency)}
+                          {formatDisplayFare(latestFare.fare_amount, latestFare.currency, displayCurrency)}
                         </span>
-                        {summary.averageFareZWL && latestFare.currency === 'USD' && (
+                        {latestFare.currency !== displayCurrency && (
                           <span className="text-xs font-black uppercase text-white bg-[#141414] px-2.5 py-1 border border-[#141414]">
-                            ZiG {summary.averageFareZWL}
+                            orig {formatCurrency(latestFare.fare_amount, latestFare.currency)}
                           </span>
                         )}
                       </div>
@@ -341,30 +349,78 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
               </div>
             </div>
 
-            {/* 4. CONNECTED BOARDING RANKS */}
+            {/* 4. CONNECTED BOARDING RANKS + "I BOARDED HERE" */}
             {connectedRanks.length > 0 && (
               <div className="pt-1">
-                <h3 className="text-xs font-black text-[#141414] uppercase tracking-wider mb-2">Connected Harare Termini</h3>
+                <h3 className="text-xs font-black text-[#141414] uppercase tracking-wider mb-2">Connected Boarding Termini</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {connectedRanks.map((rn) => (
-                    <div
-                      key={rn.id}
-                      onClick={() => {
-                        if (onSelectRank) onSelectRank(rn.id);
-                        onClose();
-                      }}
-                      className="p-3 bg-white hover:bg-[#F5F5F0] border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] hover:shadow-[4px_4px_0px_0px_#F27D26] cursor-pointer transition flex items-center justify-between"
-                    >
-                      <div className="min-w-0 pr-2">
-                        <h4 className="text-xs font-black text-[#141414] uppercase truncate">{rn.name}</h4>
-                        <p className="text-[10px] font-bold text-stone-500 truncate">{rn.address}</p>
+                  {connectedRanks.map((rn) => {
+                    const boardingStatement = store.getBoardingStatementForRank(rn.id);
+                    const justBoarded = boardedRankId === rn.id;
+                    return (
+                      <div
+                        key={rn.id}
+                        className="p-3 bg-white border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] space-y-2"
+                      >
+                        <div
+                          onClick={() => {
+                            if (onSelectRank) onSelectRank(rn.id);
+                            onClose();
+                          }}
+                          className="cursor-pointer flex items-center justify-between group"
+                        >
+                          <div className="min-w-0 pr-2">
+                            <h4 className="text-xs font-black text-[#141414] group-hover:text-[#F27D26] uppercase truncate">{rn.name}</h4>
+                            <p className="text-[10px] font-bold text-stone-500 truncate">{rn.address}</p>
+                          </div>
+                          <ArrowRight className="w-3.5 h-3.5 text-[#141414] flex-shrink-0" />
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-stone-200">
+                          <span className="text-[10px] font-black text-emerald-900 flex items-center gap-1">
+                            <Users className="w-3 h-3 text-[#F27D26]" />
+                            {boardingStatement}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              store.confirmBoardingAtRank(rn.id);
+                              setBoardedRankId(rn.id);
+                              setTimeout(() => setBoardedRankId(null), 2000);
+                            }}
+                            className={`px-2 py-1 text-[10px] font-black uppercase border border-[#141414] cursor-pointer transition shrink-0 ${
+                              justBoarded ? 'bg-emerald-600 text-white' : 'bg-[#F27D26] hover:bg-[#141414] text-white'
+                            }`}
+                          >
+                            {justBoarded ? '✓ Boarded' : 'I boarded here'}
+                          </button>
+                        </div>
                       </div>
-                      <ArrowRight className="w-3.5 h-3.5 text-[#141414] flex-shrink-0" />
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
+
+            {/* 5. ROUTE COMMUNITY RATING & COMMENTS */}
+            <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs">
+                <Star className="w-4 h-4 fill-[#F27D26] text-[#141414]" />
+                <span className="font-black uppercase text-[#141414]">
+                  {routeRating.count > 0
+                    ? `${routeRating.avg}/5 (${routeRating.count} reviews)`
+                    : 'No route reviews yet'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsReviewModalOpen(true)}
+                className="px-2.5 py-1.5 bg-[#141414] hover:bg-[#F27D26] text-white text-[10px] font-black uppercase border border-[#141414] cursor-pointer flex items-center gap-1 transition"
+              >
+                <MessageSquare className="w-3 h-3" />
+                <span>Rate / Comment</span>
+              </button>
+            </div>
           </div>
 
           {/* Sticky Bottom Actions: 2 Primary buttons */}
@@ -400,6 +456,16 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
         isOpen={isReportStatusOpen}
         onClose={() => setIsReportStatusOpen(false)}
       />
+
+      {isReviewModalOpen && (
+        <AddReviewAbuseModal
+          isOpen={isReviewModalOpen}
+          onClose={() => setIsReviewModalOpen(false)}
+          targetType="route"
+          targetId={route.id}
+          targetName={`${route.name} (${route.city})`}
+        />
+      )}
     </>
   );
 };

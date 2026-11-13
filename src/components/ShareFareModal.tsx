@@ -14,7 +14,7 @@ import {
   Smartphone
 } from 'lucide-react';
 import { FareReport, StatusReport } from '../types';
-import { formatCurrency, formatTimeAgo } from '../utils/formatters';
+import { formatCurrency, formatDisplayFare, formatTimeAgo } from '../utils/formatters';
 import { useOfflineStore } from '../hooks/useOfflineStore';
 
 interface ShareFareModalProps {
@@ -37,6 +37,7 @@ export const ShareFareModal: React.FC<ShareFareModalProps> = ({
   onNavigateToBuzz,
 }) => {
   const store = useOfflineStore();
+  const displayCurrency = store.getDisplayCurrency();
   const [copied, setCopied] = useState(false);
   const [internalComment, setInternalComment] = useState('');
   const [buzzShared, setBuzzShared] = useState(false);
@@ -53,7 +54,7 @@ export const ShareFareModal: React.FC<ShareFareModalProps> = ({
   const singleText = fare
     ? `🇿🇼 *Fambai Travel • Live Transit & Fare Update*\n` +
       `📍 *Route:* ${fare.route_name || 'Commuter Route'} (${fare.city || 'Zimbabwe'})\n` +
-      `💵 *Current Fare:* ${formatCurrency(fare.fare_amount, fare.currency)}\n` +
+      `💵 *Current Fare:* ${formatDisplayFare(fare.fare_amount, fare.currency, displayCurrency)}${fare.currency !== displayCurrency ? ` (orig ${formatCurrency(fare.fare_amount, fare.currency)})` : ''}\n` +
       `🚐 *Vehicle Type:* ${fare.transport_type || 'Toyota HiAce Kombi'}\n` +
       `⏱️ *Departure:* ${fare.departure_status || 'Loading right now'}\n` +
       `👍 *Community Verification:* ${fare.upvotes} upvotes (${formatTimeAgo(fare.reported_at)})\n\n` +
@@ -63,12 +64,11 @@ export const ShareFareModal: React.FC<ShareFareModalProps> = ({
   // Construct text for All Latest Live Fares
   const allText = 
     `🇿🇼 *Fambai Travel • Live Zimbabwe Fares Digest*\n` +
-    `Real-time crowdsourced kombi & bus fares across Zimbabwe:\n\n` +
+    `Real-time crowdsourced kombi & bus fares across Zimbabwe (${displayCurrency}):\n\n` +
     (allFares.slice(0, 5).map((f, i) => 
-      `${i + 1}. *${f.route_name}* (${f.city})\n   • Fare: ${formatCurrency(f.fare_amount, f.currency)} (${f.transport_type || 'Kombi'})\n   • Status: ${f.departure_status || 'Active'}`
+      `${i + 1}. *${f.route_name}* (${f.city})\n   • Fare: ${formatDisplayFare(f.fare_amount, f.currency, displayCurrency)} (${f.transport_type || 'Kombi'})\n   • Status: ${f.departure_status || 'Active'}`
     ).join('\n\n')) +
-    (allAlerts.length > 0 ? `\n\n⚠️ *Live Road Alerts:*\n• ${allAlerts[0].route_name || 'Traffic Alert'}: ${allAlerts[0].note || allAlerts[0].type}` : '') +
-    `\n\n📲 *Browse all 60+ routes offline:* ${shareUrl}`;
+    `\n\n📲 *Browse all routes offline:* ${shareUrl}`;
 
   const currentShareText = mode === 'single' ? singleText : allText;
   const shareTitle = mode === 'single' 
@@ -92,20 +92,11 @@ export const ShareFareModal: React.FC<ShareFareModalProps> = ({
     }
   };
 
-  // WhatsApp Share
-  const handleWhatsAppShare = () => {
-    const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(currentShareText)}`;
-    window.open(waUrl, '_blank', 'noopener,noreferrer');
-  };
-
-  // Twitter / X Share
-  const handleTwitterShare = () => {
-    const textSnippet = mode === 'single' && fare 
-      ? `Live fare for ${fare.route_name}: ${formatCurrency(fare.fare_amount, fare.currency)} (${fare.transport_type || 'Kombi'}). Verified on @FambaiTravel.`
-      : `Check the latest live kombi & bus fares across Zimbabwe on Fambai Travel.`;
-    const twUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(textSnippet)}&url=${encodeURIComponent(shareUrl)}`;
-    window.open(twUrl, '_blank', 'noopener,noreferrer');
-  };
+  const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(currentShareText)}`;
+  const twitterSnippet = mode === 'single' && fare
+    ? `Live fare for ${fare.route_name}: ${formatDisplayFare(fare.fare_amount, fare.currency, displayCurrency)} (${fare.transport_type || 'Kombi'}). Verified on @FambaiTravel.`
+    : `Check the latest live kombi & bus fares across Zimbabwe on Fambai Travel.`;
+  const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(twitterSnippet)}&url=${encodeURIComponent(shareUrl)}`;
 
   // Copy to Clipboard
   const handleCopy = () => {
@@ -264,16 +255,19 @@ export const ShareFareModal: React.FC<ShareFareModalProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   {/* WhatsApp */}
-                  <button
-                    onClick={handleWhatsAppShare}
+                  <a
+                    href={whatsappUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="p-3 bg-[#25D366] hover:bg-[#20bd5a] text-white border-2 border-[#141414] shadow-[3px_3px_0px_0px_#141414] transition font-black text-xs uppercase flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Share2 className="w-4 h-4" />
                     <span>Share on WhatsApp</span>
-                  </button>
+                  </a>
 
                   {/* Native Device Share */}
                   <button
+                    type="button"
                     onClick={handleNativeShare}
                     className="p-3 bg-[#141414] hover:bg-stone-800 text-white border-2 border-[#141414] shadow-[3px_3px_0px_0px_#F27D26] transition font-black text-xs uppercase flex items-center justify-center gap-2 cursor-pointer"
                   >
@@ -282,13 +276,15 @@ export const ShareFareModal: React.FC<ShareFareModalProps> = ({
                   </button>
 
                   {/* Twitter / X */}
-                  <button
-                    onClick={handleTwitterShare}
+                  <a
+                    href={twitterUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="p-3 bg-stone-900 hover:bg-black text-white border-2 border-[#141414] shadow-[3px_3px_0px_0px_#141414] transition font-black text-xs uppercase flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <ExternalLink className="w-4 h-4" />
                     <span>Post on X / Twitter</span>
-                  </button>
+                  </a>
 
                   {/* Copy Text & Deep Link */}
                   <button

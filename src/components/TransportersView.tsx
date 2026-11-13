@@ -18,10 +18,14 @@ import {
   Filter,
   RefreshCw,
   X,
-  Check
+  Check,
+  Star,
+  MessageSquare
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
 import { TransporterProfile, TransporterVehicleType } from '../types';
+import { AddReviewAbuseModal } from './AddReviewAbuseModal';
+import { formatTimeAgo } from '../utils/formatters';
 
 const VEHICLE_TYPE_CONFIG: Record<TransporterVehicleType, { label: string; icon: any; color: string }> = {
   hiace_combi: { label: 'HiAce (Combi)', icon: Car, color: 'bg-amber-100 text-amber-900 border-amber-300' },
@@ -49,6 +53,7 @@ export const TransportersView: React.FC = () => {
   const [isRegisterOpen, setIsRegisterOpen] = useState(false);
   const [isChangeRouteOpen, setIsChangeRouteOpen] = useState(false);
   const [selectedTransporterToEdit, setSelectedTransporterToEdit] = useState<TransporterProfile | null>(null);
+  const [reviewTransporter, setReviewTransporter] = useState<TransporterProfile | null>(null);
 
   // Filtered List
   const filteredTransporters = useMemo(() => {
@@ -278,13 +283,24 @@ export const TransportersView: React.FC = () => {
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => handleOpenEditRoute(t)}
-                        className="px-2.5 py-1 bg-white hover:bg-[#141414] hover:text-white text-[#141414] border border-[#141414] text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition cursor-pointer shadow-[1px_1px_0px_0px_#141414]"
-                      >
-                        <Edit3 className="w-3 h-3 text-[#F27D26]" />
-                        <span>Change Route</span>
-                      </button>
+                      {store.isOwnerOf(t.ownerUid, t.registeredByDeviceId) && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleOpenEditRoute(t)}
+                            className="px-2.5 py-1 bg-white hover:bg-[#141414] hover:text-white text-[#141414] border border-[#141414] text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition cursor-pointer shadow-[1px_1px_0px_0px_#141414]"
+                          >
+                            <Edit3 className="w-3 h-3 text-[#F27D26]" />
+                            <span>Change Route</span>
+                          </button>
+                          <button
+                            onClick={() => store.deleteTransporter(t.id)}
+                            className="px-2 py-1 bg-red-50 hover:bg-red-600 hover:text-white text-red-700 border border-[#141414] text-[10px] font-black uppercase transition cursor-pointer"
+                            title="Delete your transporter listing"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* Notes, Terminus, & Plates */}
@@ -305,11 +321,36 @@ export const TransportersView: React.FC = () => {
                         </span>
                       )}
                     </div>
+
+                    {/* Commuter Ratings & Recent Comments on Transporter */}
+                    {(() => {
+                      const ratingSummary = store.getRatingSummaryForTarget('transporter', t.id);
+                      const reviews = store.getSocialInteractions('transporter', t.id).slice(0, 2);
+                      if (ratingSummary.count === 0 && reviews.length === 0) return null;
+                      return (
+                        <div className="mt-2 p-2.5 bg-[#F5F5F0] border border-[#141414] space-y-1.5">
+                          {ratingSummary.count > 0 && (
+                            <div className="flex items-center gap-1.5 text-[10px] font-black uppercase text-[#141414]">
+                              <Star className="w-3.5 h-3.5 fill-[#F27D26] text-[#F27D26]" />
+                              <span>{ratingSummary.avg} / 5 ({ratingSummary.count} Commuter Reviews)</span>
+                            </div>
+                          )}
+                          {reviews.map((rev) => (
+                            <div key={rev.id} className="text-[11px] font-bold text-stone-700 flex items-baseline justify-between gap-2">
+                              <span className="truncate">
+                                <strong className="text-[#141414]">{rev.username}:</strong> "{rev.comment}"
+                              </span>
+                              <span className="text-[9px] text-stone-400 flex-shrink-0">{formatTimeAgo(rev.createdAt)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Right Column: Contact & Action Buttons */}
                   <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-stone-200">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
                       {/* Call Phone Button */}
                       <a
                         href={`tel:${t.contactPhone}`}
@@ -329,6 +370,17 @@ export const TransportersView: React.FC = () => {
                         <MessageCircle className="w-3.5 h-3.5" />
                         <span>WhatsApp</span>
                       </a>
+
+                      {/* Rate / Comment Transporter */}
+                      <button
+                        type="button"
+                        onClick={() => setReviewTransporter(t)}
+                        className="py-2 px-2.5 bg-white hover:bg-[#141414] hover:text-white text-[#141414] border-2 border-[#141414] transition cursor-pointer flex items-center gap-1 text-xs font-black uppercase"
+                        title="Rate or comment on this transporter"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5 text-[#F27D26]" />
+                        <span>Rate</span>
+                      </button>
 
                       {/* Like / Thumbs-up */}
                       <button
@@ -373,6 +425,17 @@ export const TransportersView: React.FC = () => {
             setIsChangeRouteOpen(false);
             setSelectedTransporterToEdit(null);
           }}
+        />
+      )}
+
+      {/* RATE / COMMENT TRANSPORTER MODAL */}
+      {reviewTransporter && (
+        <AddReviewAbuseModal
+          isOpen={!!reviewTransporter}
+          onClose={() => setReviewTransporter(null)}
+          targetType="transporter"
+          targetId={reviewTransporter.id}
+          targetName={`${reviewTransporter.operatorName} (${reviewTransporter.transportTypeLabel})`}
         />
       )}
     </div>
@@ -750,7 +813,8 @@ const ChangeTransporterRouteModal: React.FC<ChangeTransporterRouteModalProps> = 
                 >
                   <option value="active">Active on Route</option>
                   <option value="loading">Loading at Terminus</option>
-                  <option value="resting">Resting / Off-Duty</option>
+                  <option value="available_hire">Available for Hire</option>
+                  <option value="off_duty">Resting / Off-Duty</option>
                 </select>
               </div>
             </div>

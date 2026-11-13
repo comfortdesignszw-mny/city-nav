@@ -29,10 +29,10 @@ import {
   Coins
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
-import { BusOperator, IntercityRoute, IntercityReport, OperatorTier } from '../types';
+import { BusOperator, IntercityRoute, IntercityReport, OperatorTier, SocialTargetType } from '../types';
 import { ReportIntercityModal } from './ReportIntercityModal';
 import { AddReviewAbuseModal } from './AddReviewAbuseModal';
-import { formatTimeAgo, formatCurrency } from '../utils/formatters';
+import { formatTimeAgo, formatCurrency, formatDisplayFare } from '../utils/formatters';
 
 interface IntercityTravelViewProps {
   onSelectRoute?: (routeId: string) => void;
@@ -44,6 +44,7 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
   const operators = store.getBusOperators();
   const reports = store.getIntercityReports();
   const socialInteractions = store.getAllSocialInteractions();
+  const displayCurrency = store.getDisplayCurrency();
 
   const [activeTab, setActiveTab] = useState<'corridors' | 'operators' | 'reports' | 'buzz'>('corridors');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -55,13 +56,13 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
 
   // Social review & abuse modal state
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
-  const [reviewTarget, setReviewTarget] = useState<{ type: 'intercity' | 'operator' | 'route' | 'transporter' | 'rank'; id: string; name: string }>({
+  const [reviewTarget, setReviewTarget] = useState<{ type: SocialTargetType; id: string; name: string }>({
     type: 'intercity',
     id: '',
     name: ''
   });
 
-  const handleOpenReviewModal = (type: 'intercity' | 'operator' | 'route' | 'transporter' | 'rank', id: string, name: string) => {
+  const handleOpenReviewModal = (type: SocialTargetType, id: string, name: string) => {
     setReviewTarget({ type, id, name });
     setIsReviewModalOpen(true);
   };
@@ -203,7 +204,7 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
       </div>
 
       {/* Main View Switcher Tabs */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <button
           id="tab-corridors-btn"
           onClick={() => setActiveTab('corridors')}
@@ -389,13 +390,13 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
                     </p>
                   </div>
 
-                  <div className="text-right flex-shrink-0">
-                    <div className="text-[10px] font-black uppercase text-[#141414]/60">
-                      Fare Range
-                    </div>
-                    <div className="text-2xl font-black text-[#141414]">
-                      ${route.fareRange.min} – ${route.fareRange.max} USD
-                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className="text-[10px] font-black uppercase text-[#141414]/60">
+                        Fare Range ({displayCurrency})
+                      </div>
+                      <div className="text-xl sm:text-2xl font-black text-[#141414]">
+                        {formatDisplayFare(route.fareRange.min, 'USD', displayCurrency)} – {formatDisplayFare(route.fareRange.max, 'USD', displayCurrency)}
+                      </div>
                     <div className="mt-1.5 flex items-center justify-end gap-1.5 flex-wrap">
                       <button
                         onClick={() => handleOpenReviewModal('intercity', route.id, route.name)}
@@ -475,12 +476,12 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
                         {/* Price Tag & Action */}
                         <div className="flex sm:flex-col items-center sm:items-end justify-between gap-1 flex-shrink-0">
                           <div className="text-right">
-                            <span className="text-2xl font-black text-[#141414]">
-                              ${opService.fareUSD} <span className="text-xs font-bold text-stone-500">USD</span>
+                            <span className="text-xl sm:text-2xl font-black text-[#141414]">
+                              {formatDisplayFare(opService.fareUSD, 'USD', displayCurrency)}
                             </span>
-                            {opService.fareZiG && (
+                            {displayCurrency !== 'USD' && (
                               <div className="text-[10px] font-black text-stone-600">
-                                ZiG {opService.fareZiG}
+                                ${opService.fareUSD} USD
                               </div>
                             )}
                           </div>
@@ -714,13 +715,13 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
                       {/* Fare Badge */}
                       <div className="text-right flex-shrink-0">
                         <div className="text-2xl font-black text-[#141414]">
-                          ${rep.farePaidUSD} <span className="text-xs text-stone-500">USD</span>
+                          {formatDisplayFare(rep.farePaidUSD, 'USD', displayCurrency)}
                         </div>
-                        {rep.farePaidZiG && (
-                          <div className="text-[10px] font-black text-stone-600">
-                            ZiG {rep.farePaidZiG}
-                          </div>
-                        )}
+                        <div className="text-[10px] font-black text-stone-600">
+                          {rep.farePaidUSD ? `$${rep.farePaidUSD} USD` : ''}
+                          {rep.farePaidZiG ? ` • ZWG ${rep.farePaidZiG}` : ''}
+                          {rep.farePaidZAR ? ` • R${rep.farePaidZAR}` : ''}
+                        </div>
                       </div>
                     </div>
 
@@ -904,7 +905,10 @@ export const IntercityTravelView: React.FC<IntercityTravelViewProps> = () => {
                         {buzz.confirmedFare && (
                           <span className="px-2 py-0.5 bg-emerald-50 border border-emerald-300 text-emerald-900 text-[10px] font-black uppercase flex items-center gap-1">
                             <Coins className="w-3 h-3 text-emerald-600" />
-                            <span>Confirmed Fare: {formatCurrency(buzz.confirmedFare.amount, buzz.confirmedFare.currency)}</span>
+                            <span>
+                              Confirmed Fare: {formatDisplayFare(buzz.confirmedFare.amount, buzz.confirmedFare.currency, displayCurrency)}
+                              {buzz.confirmedFare.currency !== displayCurrency && ` (${formatCurrency(buzz.confirmedFare.amount, buzz.confirmedFare.currency)})`}
+                            </span>
                           </span>
                         )}
                         {buzz.confirmedDepartureTime && (

@@ -1,11 +1,46 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
-  <rect width="512" height="512" rx="128" fill="#141414"/>
-  <rect x="120" y="120" width="272" height="272" rx="48" fill="#F27D26"/>
-  <rect x="156" y="160" width="200" height="96" rx="20" fill="#141414"/>
-  <rect x="160" y="300" width="48" height="32" rx="8" fill="#FFFFFF"/>
-  <rect x="304" y="300" width="48" height="32" rx="8" fill="#FFFFFF"/>
-  <circle cx="180" cy="400" r="28" fill="#141414"/>
-  <circle cx="180" cy="400" r="14" fill="#FFFFFF"/>
-  <circle cx="332" cy="400" r="28" fill="#141414"/>
-  <circle cx="332" cy="400" r="14" fill="#FFFFFF"/>
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E1E1E"/>
+      <stop offset="100%" stop-color="#111111"/>
+    </linearGradient>
+    <linearGradient id="bodyTop" x1="120" y1="110" x2="380" y2="310" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FF9A44"/>
+      <stop offset="55%" stop-color="#F27D26"/>
+      <stop offset="100%" stop-color="#C9590C"/>
+    </linearGradient>
+    <linearGradient id="bodySide" x1="290" y1="130" x2="430" y2="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E56E18"/>
+      <stop offset="100%" stop-color="#9A4206"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="120" y1="150" x2="290" y2="250" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3A404D"/>
+      <stop offset="100%" stop-color="#16181D"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="url(#bgGrad)"/>
+  <!-- Shadow -->
+  <ellipse cx="260" cy="404" rx="156" ry="26" fill="#000000" fill-opacity="0.55"/>
+  <!-- Roof rack -->
+  <path d="M168 118 L322 104 L392 128 L392 146 L168 140 Z" fill="#2A2A2A"/>
+  <!-- Side panel 3D -->
+  <path d="M300 132 L416 154 C428 157 434 168 434 182 L434 338 L300 368 Z" fill="url(#bodySide)"/>
+  <!-- Front kombi shell -->
+  <path d="M138 134 C144 122 158 116 176 116 L300 124 C312 125 320 136 318 150 L306 368 L94 344 C82 342 78 328 80 310 L96 226 C100 206 118 164 138 134 Z" fill="url(#bodyTop)"/>
+  <!-- Windshield -->
+  <path d="M144 148 L292 154 L274 228 L108 220 Z" fill="url(#glass)"/>
+  <!-- Side Windows -->
+  <path d="M324 160 L356 168 L352 232 L314 230 Z" fill="#181B20"/>
+  <path d="M366 170 L422 182 L422 246 L364 236 Z" fill="#181B20"/>
+  <!-- Grille & Bumper -->
+  <path d="M84 288 L302 302 L300 368 L84 344 Z" fill="#1E1E1E"/>
+  <rect x="136" y="294" width="114" height="16" rx="6" fill="#111111"/>
+  <!-- Headlights -->
+  <path d="M90 256 L132 258 L130 286 L86 282 Z" fill="#FFFFFF"/>
+  <path d="M248 264 L302 262 L302 296 L246 294 Z" fill="#FFFFFF"/>
+  <!-- Wheels -->
+  <ellipse cx="322" cy="364" rx="26" ry="38" fill="#111111" stroke="#2D2D2D" stroke-width="5"/>
+  <ellipse cx="322" cy="364" rx="11" ry="18" fill="#3A3A3A"/>
+  <ellipse cx="408" cy="340" rx="19" ry="29" fill="#111111" stroke="#2D2D2D" stroke-width="4"/>
+  <ellipse cx="408" cy="340" rx="8" ry="13" fill="#3A3A3A"/>
 </svg>

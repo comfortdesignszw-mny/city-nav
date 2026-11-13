@@ -1,0 +1,347 @@
+{
+  "entities": {
+    "CommuterProfile": {
+      "title": "CommuterProfile",
+      "description": "Public anonymous device-linked commuter identity with assigned userId, ownerUid, username, handle, badge, and reputation score.",
+      "type": "object",
+      "properties": {
+        "device_id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "username": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "handle": { "type": "string", "minLength": 1, "maxLength": 45 },
+        "name": { "type": "string", "maxLength": 60 },
+        "avatarColor": { "type": "string", "minLength": 3, "maxLength": 20 },
+        "commuterBadge": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "role": { "type": "string", "enum": ["commuter", "transporter"] },
+        "reputation_score": { "type": "number" },
+        "reports_count": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["device_id", "userId", "ownerUid", "username", "handle", "avatarColor", "commuterBadge", "role", "reputation_score", "reports_count", "createdAt", "updatedAt"]
+    },
+    "CommuterPrivateContact": {
+      "title": "CommuterPrivateContact",
+      "description": "Owner-only PII document holding commuter phone number.",
+      "type": "object",
+      "properties": {
+        "device_id": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["device_id", "ownerUid", "updatedAt"]
+    },
+    "RouteItem": {
+      "title": "RouteItem",
+      "description": "Crowdsourced Zimbabwe commuter corridor or rank-to-suburb route.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "origin": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "destination": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "city": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "province": { "type": "string", "maxLength": 60 },
+        "category": { "type": "string", "enum": ["cbd_location", "near_town", "inter_city"] },
+        "distanceKm": { "type": "number" },
+        "commonVehicle": { "type": "string", "maxLength": 100 },
+        "ranksServedIds": { "type": "array" },
+        "waypoints": { "type": "array" },
+        "createdByDeviceId": { "type": "string", "maxLength": 128 },
+        "createdByUsername": { "type": "string", "maxLength": 40 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "name", "origin", "destination", "city", "category", "ranksServedIds", "waypoints", "ownerUid", "createdAt"]
+    },
+    "FareReport": {
+      "title": "FareReport",
+      "description": "Crowdsourced fare report in USD, ZWG, or ZAR.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "route_id": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "fare_amount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["USD", "ZWG", "ZWL", "ZAR", "BWP"] },
+        "reported_at": { "type": "number" },
+        "reporter_device_id": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "reporter_username": { "type": "string", "maxLength": 40 },
+        "reporter_badge": { "type": "string", "maxLength": 60 },
+        "upvotes": { "type": "number" },
+        "downvotes": { "type": "number" },
+        "source": { "type": "string", "maxLength": 20 },
+        "transport_type": { "type": "string", "maxLength": 100 },
+        "departure_status": { "type": "string", "maxLength": 120 },
+        "route_name": { "type": "string", "maxLength": 120 },
+        "city": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["id", "route_id", "fare_amount", "currency", "reported_at", "reporter_device_id", "ownerUid", "upvotes", "downvotes"]
+    },
+    "StatusReport": {
+      "title": "StatusReport",
+      "description": "Live road condition, police blitz, or queue status alert.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "route_id": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "type": { "type": "string", "enum": ["running", "delayed", "diverted", "police_blitz", "fuel_shortage"] },
+        "note": { "type": "string", "maxLength": 120 },
+        "reported_at": { "type": "number" },
+        "expires_at": { "type": "number" },
+        "reporter_device_id": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "reporter_username": { "type": "string", "maxLength": 40 },
+        "source": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["id", "route_id", "type", "reported_at", "expires_at", "reporter_device_id", "ownerUid"]
+    },
+    "IntercityReport": {
+      "title": "IntercityReport",
+      "description": "Crowdsourced long-distance bus coach fare and condition report.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "routeId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "operatorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "operatorName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "farePaidUSD": { "type": "number" },
+        "farePaidZiG": { "type": "number" },
+        "farePaidZAR": { "type": "number" },
+        "departureTime": { "type": "string", "maxLength": 40 },
+        "departureTerminal": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "seatAvailability": { "type": "string", "enum": ["plenty", "filling_fast", "full"] },
+        "busConditionRating": { "type": "number" },
+        "roadStatusNote": { "type": "string", "maxLength": 150 },
+        "reportedAt": { "type": "number" },
+        "reporterDeviceId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "reporterUsername": { "type": "string", "maxLength": 40 },
+        "upvotes": { "type": "number" },
+        "downvotes": { "type": "number" }
+      },
+      "required": ["id", "routeId", "operatorId", "operatorName", "farePaidUSD", "departureTerminal", "seatAvailability", "busConditionRating", "reportedAt", "reporterDeviceId", "ownerUid", "upvotes", "downvotes"]
+    },
+    "TransporterProfile": {
+      "title": "TransporterProfile",
+      "description": "Registered kombi, sprinter, mushikashika, or coach operator and fleet details.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "operatorName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "contactPhone": { "type": "string", "minLength": 4, "maxLength": 40 },
+        "transportType": { "type": "string", "maxLength": 50 },
+        "transportTypeLabel": { "type": "string", "maxLength": 80 },
+        "currentRouteName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "currentRouteId": { "type": "string", "maxLength": 128 },
+        "city": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "vehiclePlate": { "type": "string", "maxLength": 30 },
+        "baseTerminus": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["active", "loading", "available_hire", "off_duty"] },
+        "statusNote": { "type": "string", "maxLength": 160 },
+        "registeredAt": { "type": "number" },
+        "lastRouteUpdate": { "type": "number" },
+        "registeredByDeviceId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "username": { "type": "string", "maxLength": 40 },
+        "userHandle": { "type": "string", "maxLength": 45 },
+        "likes": { "type": "number" }
+      },
+      "required": ["id", "operatorName", "contactPhone", "transportType", "transportTypeLabel", "currentRouteName", "city", "status", "registeredAt", "lastRouteUpdate", "registeredByDeviceId", "ownerUid", "likes"]
+    },
+    "CommuterSocialInteraction": {
+      "title": "CommuterSocialInteraction",
+      "description": "Social conversations, questions, recommendations, ratings, comments, amenity feedback, and abuse alerts.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "targetType": { "type": "string", "enum": ["route", "intercity", "operator", "rank", "transporter", "commuter"] },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "targetName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "postType": { "type": "string", "enum": ["conversation", "question", "recommendation", "review", "abuse"] },
+        "username": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "userHandle": { "type": "string", "minLength": 1, "maxLength": 45 },
+        "userBadge": { "type": "string", "maxLength": 60 },
+        "avatarBg": { "type": "string", "maxLength": 20 },
+        "comment": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "rating": { "type": "number" },
+        "likes": { "type": "number" },
+        "dislikes": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" },
+        "deviceId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "mentionedHandles": { "type": "array" },
+        "mentionedDeviceIds": { "type": "array" },
+        "recommendedLocation": { "type": "string", "maxLength": 120 },
+        "recommendedCommuterUsername": { "type": "string", "maxLength": 60 },
+        "confirmedFare": { "type": "object" },
+        "confirmedDepartureTime": { "type": "string", "maxLength": 80 },
+        "amenitiesReview": { "type": "object" },
+        "isAbuseReport": { "type": "boolean" },
+        "abuseType": { "type": "string", "maxLength": 40 },
+        "abuseLocation": { "type": "string", "maxLength": 100 },
+        "abusePlateNumber": { "type": "string", "maxLength": 30 }
+      },
+      "required": ["id", "targetType", "targetId", "targetName", "username", "userHandle", "userBadge", "avatarBg", "comment", "likes", "dislikes", "createdAt", "deviceId", "ownerUid"]
+    },
+    "SocialReply": {
+      "title": "SocialReply",
+      "description": "Threaded reply on a Commuter Buzz post supporting @mentions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "interactionId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "parentAuthorDeviceId": { "type": "string", "maxLength": 128 },
+        "parentAuthorUsername": { "type": "string", "maxLength": 40 },
+        "deviceId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "username": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "userHandle": { "type": "string", "minLength": 1, "maxLength": 45 },
+        "userBadge": { "type": "string", "maxLength": 60 },
+        "avatarBg": { "type": "string", "maxLength": 20 },
+        "comment": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "mentionedHandles": { "type": "array" },
+        "mentionedDeviceIds": { "type": "array" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "interactionId", "deviceId", "ownerUid", "username", "userHandle", "userBadge", "avatarBg", "comment", "createdAt"]
+    },
+    "SocialReactionRecord": {
+      "title": "SocialReactionRecord",
+      "description": "Owner-scoped vote/like reaction document so users never modify other owners' posts or fare reports.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 256, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "targetType": { "type": "string", "enum": ["fare", "intercity", "transporter", "social"] },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reaction": { "type": "string", "enum": ["up", "down", "like", "dislike"] },
+        "deviceId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "username": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "targetType", "targetId", "reaction", "deviceId", "ownerUid", "createdAt", "updatedAt"]
+    },
+    "CommuterNotification": {
+      "title": "CommuterNotification",
+      "description": "Notification generated on @tag, reply, like, or rating.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["reply", "tag", "like", "rating"] },
+        "recipientDeviceId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "recipientUid": { "type": "string", "maxLength": 128 },
+        "senderDeviceId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "senderUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "senderUsername": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "senderHandle": { "type": "string", "minLength": 1, "maxLength": 45 },
+        "targetType": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "postId": { "type": "string", "maxLength": 128 },
+        "snippet": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "type", "recipientDeviceId", "senderDeviceId", "senderUid", "senderUsername", "senderHandle", "targetType", "targetId", "snippet", "read", "createdAt"]
+    },
+    "BoardingConfirmation": {
+      "title": "BoardingConfirmation",
+      "description": "One-tap 'I boarded here' confirmation tagged to a Bus Terminus or Kombi Rank.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "rankId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "rankName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "city": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "deviceId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "username": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "userHandle": { "type": "string", "minLength": 1, "maxLength": 45 },
+        "statement": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "locationSource": { "type": "string", "maxLength": 20 },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "rankId", "rankName", "city", "deviceId", "ownerUid", "username", "userHandle", "statement", "createdAt"]
+    },
+    "LocationAnchor": {
+      "title": "LocationAnchor",
+      "description": "Geolocation tag and anchor shared by a commuter session.",
+      "type": "object",
+      "properties": {
+        "deviceId": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "username": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "source": { "type": "string", "enum": ["gps", "preset", "manual"] },
+        "accuracyMeters": { "type": "number" },
+        "nearestRankId": { "type": "string", "maxLength": 128 },
+        "nearestRankName": { "type": "string", "maxLength": 120 },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["deviceId", "ownerUid", "username", "lat", "lng", "name", "source", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/commuters/{deviceId}": {
+      "schema": { "$ref": "#/entities/CommuterProfile" },
+      "description": "Public device-linked commuter identities and reputation (owner-only mutation)."
+    },
+    "/commuters/{deviceId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/CommuterPrivateContact" },
+      "description": "Owner-only private contact details (phone number PII)."
+    },
+    "/routes/{routeId}": {
+      "schema": { "$ref": "#/entities/RouteItem" },
+      "description": "Crowdsourced transit corridors and routes across Zimbabwe."
+    },
+    "/fare_reports/{fareId}": {
+      "schema": { "$ref": "#/entities/FareReport" },
+      "description": "Live crowdsourced commuter fares across USD, ZWG, and ZAR (owner-only CRUD)."
+    },
+    "/status_reports/{statusId}": {
+      "schema": { "$ref": "#/entities/StatusReport" },
+      "description": "Live road conditions, queues, and police blitz alerts (owner-only CRUD)."
+    },
+    "/intercity_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/IntercityReport" },
+      "description": "Long-distance intercity coach fare and trip reports (owner-only CRUD)."
+    },
+    "/transporters/{transporterId}": {
+      "schema": { "$ref": "#/entities/TransporterProfile" },
+      "description": "Registered Zimbabwean transport operators, drivers, and vehicle fleets (owner-only CRUD)."
+    },
+    "/social_interactions/{interactionId}": {
+      "schema": { "$ref": "#/entities/CommuterSocialInteraction" },
+      "description": "Commuter Buzz posts, questions, recommendations, ratings, and abuse reports (owner-only CRUD)."
+    },
+    "/social_replies/{replyId}": {
+      "schema": { "$ref": "#/entities/SocialReply" },
+      "description": "Threaded replies to Commuter Buzz posts (owner-only CRUD)."
+    },
+    "/social_reactions/{reactionId}": {
+      "schema": { "$ref": "#/entities/SocialReactionRecord" },
+      "description": "Owner-owned vote/like reactions aggregated on the client."
+    },
+    "/notifications/{notifId}": {
+      "schema": { "$ref": "#/entities/CommuterNotification" },
+      "description": "User notifications for tags, replies, likes, and ratings."
+    },
+    "/boarding_confirmations/{boardingId}": {
+      "schema": { "$ref": "#/entities/BoardingConfirmation" },
+      "description": "One-tap 'I boarded here' commuter confirmations per rank/terminus."
+    },
+    "/location_anchors/{deviceId}": {
+      "schema": { "$ref": "#/entities/LocationAnchor" },
+      "description": "Commuter geolocation tags and rank proximity anchors."
+    }
+  }
+}

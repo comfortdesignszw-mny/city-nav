@@ -25,11 +25,20 @@ import {
   Sparkles,
   RefreshCw,
   ExternalLink,
-  Share2
+  Share2,
+  Users,
+  Star
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
 import { RouteCategory, FareReport } from '../types';
-import { formatTimeAgo, formatCurrency, getStatusConfig } from '../utils/formatters';
+import {
+  formatTimeAgo,
+  formatCurrency,
+  formatDisplayFare,
+  normalizeCurrency,
+  THREE_CURRENCIES,
+  getStatusConfig,
+} from '../utils/formatters';
 import { UserLocationBar } from './UserLocationBar';
 import { AddRouteFareModal } from './AddRouteFareModal';
 import { ShareFareModal } from './ShareFareModal';
@@ -76,6 +85,7 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
   const routes = store.getRoutes();
   const ranks = store.getRanks();
   const userLocation = store.getUserLocation();
+  const displayCurrency = store.getDisplayCurrency();
 
   // Search and view states
   const [searchQuery, setSearchQuery] = useState('');
@@ -278,7 +288,24 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
                   Latest Live Fares &amp; Active Departures
                 </h2>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                {/* 3-Currency Toggle (USD | ZWG | ZAR) */}
+                <div className="flex border-2 border-[#141414] bg-white">
+                  {THREE_CURRENCIES.map((curr) => (
+                    <button
+                      key={curr}
+                      type="button"
+                      onClick={() => store.setDisplayCurrency(curr)}
+                      className={`px-2 py-0.5 text-[10px] font-black uppercase border-r last:border-r-0 border-[#141414] cursor-pointer transition ${
+                        displayCurrency === curr
+                          ? 'bg-[#141414] text-[#F27D26]'
+                          : 'bg-white text-[#141414] hover:bg-[#F5F5F0]'
+                      }`}
+                    >
+                      {curr}
+                    </button>
+                  ))}
+                </div>
                 <button
                   onClick={() => setShareModalState({
                     isOpen: true,
@@ -367,8 +394,13 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
                     <div className="flex items-center gap-3 sm:flex-col sm:items-end justify-between border-t sm:border-t-0 border-stone-200 pt-2 sm:pt-0">
                       <div className="text-right">
                         <span className="text-base sm:text-lg font-black text-[#141414]">
-                          {formatCurrency(fare.fare_amount, fare.currency)}
+                          {formatDisplayFare(fare.fare_amount, fare.currency, displayCurrency)}
                         </span>
+                        {normalizeCurrency(fare.currency) !== displayCurrency && (
+                          <span className="block text-[9px] font-bold text-stone-500">
+                            Reported: {formatCurrency(fare.fare_amount, fare.currency)}
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-1">
@@ -435,6 +467,9 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
               {nearestRanks.map((rank) => {
                 const distStr = formatDistance(rank.distanceKm);
                 const walkEta = formatWalkingEta(rank.distanceKm);
+                const boardingStmt = store.getBoardingStatementForRank(rank.id);
+                const boardedRecently = store.hasUserBoardedRankRecently(rank.id);
+                const rankRating = store.getRatingSummaryForTarget('rank', rank.id);
 
                 return (
                   <div
@@ -444,9 +479,17 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
                   >
                     <div>
                       <div className="flex items-center justify-between gap-1.5 mb-1">
-                        <span className="text-[9px] font-black uppercase px-1.5 py-0.2 bg-[#141414] text-white">
-                          {rank.city}
-                        </span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[9px] font-black uppercase px-1.5 py-0.2 bg-[#141414] text-white">
+                            {rank.city}
+                          </span>
+                          {rankRating.count > 0 && (
+                            <span className="text-[9px] font-black bg-amber-100 border border-[#141414] px-1 py-0.2 flex items-center gap-0.5 text-[#141414]">
+                              <Star className="w-2.5 h-2.5 fill-[#F27D26] text-[#F27D26]" />
+                              {rankRating.avg} ({rankRating.count})
+                            </span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-1 text-[10px] font-black text-[#F27D26] bg-white px-1.5 py-0.2 border border-[#141414]">
                           <Compass className="w-3 h-3" />
                           <span>{distStr} ({rank.cardinal})</span>
@@ -460,6 +503,27 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
                       <p className="text-[11px] font-medium text-stone-600 line-clamp-1 mt-0.5">
                         {rank.address || 'Central Transit Rank'}
                       </p>
+
+                      <div className="mt-1.5 flex items-center justify-between gap-2 bg-white border border-[#141414] px-2 py-1">
+                        <span className="text-[10px] font-black text-[#141414] flex items-center gap-1">
+                          <Users className="w-3 h-3 text-[#F27D26]" />
+                          {boardingStmt}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            store.confirmBoardingAtRank(rank.id);
+                          }}
+                          className={`px-2 py-0.5 text-[9px] font-black uppercase border border-[#141414] transition cursor-pointer ${
+                            boardedRecently
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-[#F27D26] hover:bg-[#141414] text-white'
+                          }`}
+                        >
+                          {boardedRecently ? 'Boarded ✓' : 'I boarded here'}
+                        </button>
+                      </div>
                     </div>
 
                     <div className="border-t border-stone-300 mt-2.5 pt-2 flex items-center justify-between text-[10px] font-bold text-stone-600">
@@ -732,8 +796,8 @@ export const HomeRouteSearch: React.FC<HomeRouteSearchProps> = ({
                       <div className="text-right">
                         <div className="text-base font-black text-[#141414]">
                           {latestFare 
-                            ? formatCurrency(latestFare.fare_amount, latestFare.currency)
-                            : '$1.00 USD'}
+                            ? formatDisplayFare(latestFare.fare_amount, latestFare.currency, displayCurrency)
+                            : formatDisplayFare(1, 'USD', displayCurrency)}
                         </div>
                         <div className="text-[10px] font-bold text-stone-500">
                           {latestFare ? formatTimeAgo(latestFare.reported_at) : 'Estimated'}

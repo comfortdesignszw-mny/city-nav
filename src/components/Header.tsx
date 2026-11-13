@@ -3,20 +3,23 @@ import {
   Bus, 
   Wifi, 
   WifiOff, 
-  CloudUpload, 
   MapPin, 
   ListOrdered, 
   UserCheck, 
   RefreshCw,
-  Sparkles,
-  Smartphone,
   Car,
   MessageSquare,
-  User
+  Database,
+  Check,
+  ShieldCheck,
+  LogIn,
+  LogOut
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
 import { UserProfileModal } from './UserProfileModal';
 import { PWAInstallButton } from './PWAInstallButton';
+import { THREE_CURRENCIES, formatTimeAgo } from '../utils/formatters';
+import { signInWithGoogle, signOutCloud } from '../services/firebase';
 
 export type NavTab = 'routes' | 'intercity' | 'transporters' | 'buzz' | 'ranks' | 'my-reports';
 
@@ -30,41 +33,128 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
   const isOnline = store.isEffectivelyOnline();
   const isSimulated = store.isOfflineSimulated();
   const pendingCount = store.getPendingWritesCount();
+  const unreadNotifCount = store.getUnreadNotificationsCount();
   const profile = store.getUserProfile();
+  const deviceId = store.getDeviceId();
+  const userId = store.getUserId();
+  const displayCurrency = store.getDisplayCurrency();
+  const syncStatus = store.getSyncStatus();
+  const authStatus = store.getAuthStatus();
+
   const [showSimInfo, setShowSimInfo] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+
+  const handleGlobalSync = async () => {
+    const res = await store.globalSyncNow();
+    if (res.pulled && !res.error) {
+      setSyncNotice(
+        res.pushed > 0
+          ? `Global Sync complete: pushed ${res.pushed} & updated from cloud`
+          : 'Global Sync complete: all devices up to date'
+      );
+    } else if (res.error) {
+      setSyncNotice(res.error);
+    }
+    setTimeout(() => setSyncNotice(null), 4000);
+  };
+
+  const handleGoogleSignIn = async () => {
+    const res = await signInWithGoogle();
+    if (res.error) {
+      setSyncNotice(res.error);
+      setTimeout(() => setSyncNotice(null), 4000);
+    } else if (res.user) {
+      setSyncNotice(`Signed in as ${res.user.displayName || res.user.email || 'Commuter'} — syncing data!`);
+      await store.globalSyncNow();
+      setTimeout(() => setSyncNotice(null), 4000);
+    }
+  };
 
   return (
     <header className="sticky top-0 z-40 bg-[#F5F5F0] text-[#141414] border-b-2 border-[#141414]">
       {/* Top Brand & Status Bar */}
-      <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 sm:gap-3 cursor-pointer" onClick={() => setActiveTab('routes')}>
-          <div className="w-10 h-10 bg-[#141414] text-white border-2 border-[#141414] flex items-center justify-center font-black shadow-[2px_2px_0px_0px_#F27D26] flex-shrink-0">
-            <Bus className="w-5 h-5 text-[#F27D26]" />
-          </div>
+          <img
+            src="/pwa-192x192.png"
+            alt="Fambai 3D Kombi Insignia"
+            className="w-10 h-10 object-cover border-2 border-[#141414] shadow-[2px_2px_0px_0px_#F27D26] flex-shrink-0 bg-[#141414]"
+          />
           <div>
             <div className="flex items-baseline gap-1.5">
-              <span className="text-xl sm:text-2xl font-black tracking-tighter text-[#141414]">FAMBAI</span>
-              <span className="text-xl sm:text-2xl font-light italic tracking-tighter text-[#F27D26]">/HAMBANI</span>
-              <span className="hidden xs:inline-block bg-[#141414] text-white px-2 py-0.5 text-[9px] font-black uppercase tracking-widest ml-1 border border-[#141414]">
-                ZIMBABWE
+              <span className="text-lg sm:text-2xl font-black tracking-tighter text-[#141414]">FAMBAI</span>
+              <span className="text-lg sm:text-2xl font-light italic tracking-tighter text-[#F27D26]">/HAMBANI</span>
+              <span className="hidden xs:inline-block bg-[#141414] text-white px-1.5 py-0.5 text-[9px] font-black uppercase tracking-widest ml-1 border border-[#141414]">
+                ZW
               </span>
             </div>
             <p className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-[#141414]/70">
-              The City Navigator • Zimbabwe
+              {profile.username} • UID {userId.slice(-6).toUpperCase()} • DEV {deviceId.slice(-5).toUpperCase()}
             </p>
           </div>
         </div>
 
-        {/* User Profile Pill & Connectivity */}
-        <div className="flex items-center gap-2">
+        {/* Controls: 3-Currency Toggle, Global Sync, Install, Profile, Connectivity */}
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-end">
+          {/* 3-Currency Toggle (USD | ZWG | ZAR) */}
+          <div
+            className="flex border-2 border-[#141414] bg-white shadow-[2px_2px_0px_0px_#141414]"
+            role="group"
+            aria-label="Select display currency"
+          >
+            {THREE_CURRENCIES.map((curr) => (
+              <button
+                key={curr}
+                type="button"
+                onClick={() => store.setDisplayCurrency(curr)}
+                className={`px-2 py-1 text-[10px] font-black uppercase tracking-wider transition cursor-pointer border-r last:border-r-0 border-[#141414] ${
+                  displayCurrency === curr
+                    ? 'bg-[#141414] text-[#F27D26]'
+                    : 'bg-white text-[#141414] hover:bg-[#F5F5F0]'
+                }`}
+                title={`Display fares in ${curr}`}
+              >
+                {curr}
+              </button>
+            ))}
+          </div>
+
+          {/* Global Cloud Sync Button */}
+          <button
+            id="global-sync-btn"
+            type="button"
+            onClick={handleGlobalSync}
+            disabled={syncStatus.isSyncing}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-[10px] sm:text-xs font-black uppercase tracking-wider border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] transition cursor-pointer active:translate-x-[1px] active:translate-y-[1px] active:shadow-none ${
+              syncStatus.isSyncing
+                ? 'bg-[#F27D26] text-white'
+                : pendingCount > 0
+                ? 'bg-[#F27D26] text-white hover:bg-[#d96615]'
+                : 'bg-white text-[#141414] hover:bg-[#141414] hover:text-white'
+            }`}
+            title={
+              syncStatus.lastSyncedAt
+                ? `Last synced ${formatTimeAgo(syncStatus.lastSyncedAt)} • Click to Global Sync across all devices`
+                : 'Global Sync all crowdsourced transit data with cloud database'
+            }
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${syncStatus.isSyncing ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">{syncStatus.isSyncing ? 'Syncing...' : 'Global Sync'}</span>
+            {pendingCount > 0 && (
+              <span className="bg-[#141414] text-white px-1 py-0.2 text-[9px] font-black">
+                {pendingCount}
+              </span>
+            )}
+          </button>
+
           {/* Lightweight Native PWA Install Button */}
           <PWAInstallButton variant="compact" />
 
-          {/* Commuter Profile Pill (Directly opens merged Profile & Reports) */}
+          {/* Commuter Profile Pill */}
           <button
             onClick={() => setActiveTab('my-reports')}
-            className={`flex items-center gap-1.5 border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] px-2.5 py-1 text-xs font-black uppercase transition cursor-pointer ${
+            className={`flex items-center gap-1.5 border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] px-2 py-1 text-xs font-black uppercase transition cursor-pointer ${
               activeTab === 'my-reports' ? 'bg-[#141414] text-white' : 'bg-white hover:bg-[#F27D26] hover:text-white'
             }`}
             title="Open Profile & My Reports"
@@ -75,26 +165,14 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
             >
               {profile.username ? profile.username.charAt(0).toUpperCase() : 'U'}
             </div>
-            <span className="hidden xs:inline">{profile.name || profile.handle || '@commuter'}</span>
+            <span className="hidden md:inline max-w-[90px] truncate">{profile.name || profile.username || '@commuter'}</span>
           </button>
-
-          {/* Outbox Badge */}
-          {pendingCount > 0 && (
-            <button
-              onClick={() => setActiveTab('my-reports')}
-              className="flex items-center gap-1.5 bg-[#F27D26] text-white border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] px-2.5 py-1 text-xs font-black uppercase tracking-wider hover:bg-[#d96615] transition active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer"
-              title="Writes queued in Outbox awaiting background sync"
-            >
-              <CloudUpload className="w-3.5 h-3.5" />
-              <span>{pendingCount} outbox</span>
-            </button>
-          )}
 
           {/* Offline / Online Status Pill with interactive toggle */}
           <div className="relative">
             <button
               onClick={() => setShowSimInfo(!showSimInfo)}
-              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-black uppercase tracking-widest border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] transition cursor-pointer active:translate-x-[1px] active:translate-y-[1px] active:shadow-none ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-[10px] sm:text-xs font-black uppercase tracking-widest border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] transition cursor-pointer active:translate-x-[1px] active:translate-y-[1px] active:shadow-none ${
                 isOnline
                   ? 'bg-[#141414] text-white hover:bg-[#F27D26]'
                   : 'bg-[#F27D26] text-white hover:bg-[#141414]'
@@ -102,26 +180,25 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
             >
               {isOnline ? (
                 <>
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse mr-0.5" />
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                   <Wifi className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Offline Ready</span>
-                  <span className="sm:hidden">Ready</span>
+                  <span className="hidden md:inline">{authStatus.uid ? 'Dual Sync Live' : 'Online'}</span>
                 </>
               ) : (
                 <>
                   <WifiOff className="w-3.5 h-3.5 text-white" />
-                  <span>Offline {isSimulated ? '(Sim)' : ''}</span>
+                  <span>Offline{isSimulated ? ' (Sim)' : ''}</span>
                 </>
               )}
             </button>
 
-            {/* Offline Simulator popover */}
+            {/* Offline Simulator, RLS Auth & SQLite popover */}
             {showSimInfo && (
-              <div className="absolute right-0 mt-2 w-72 bg-white text-[#141414] rounded-none shadow-[6px_6px_0px_0px_#141414] p-4 border-2 border-[#141414] z-50 text-xs">
+              <div className="absolute right-0 mt-2 w-80 bg-white text-[#141414] rounded-none shadow-[6px_6px_0px_0px_#141414] p-4 border-2 border-[#141414] z-50 text-xs">
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-black text-[#141414] uppercase tracking-wider flex items-center gap-1.5">
-                    <Smartphone className="w-4 h-4 text-[#F27D26]" />
-                    Zero-Connectivity
+                    <Database className="w-4 h-4 text-[#F27D26]" />
+                    SQLite + Dual Cloud Sync
                   </span>
                   <button 
                     onClick={() => setShowSimInfo(false)}
@@ -130,12 +207,54 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                     ✕
                   </button>
                 </div>
-                <p className="text-stone-700 mb-3 leading-relaxed font-medium">
-                  Fambai/Hambani uses the <strong>Outbox Pattern</strong>. All fare and status reports queue locally first in local storage and sync silently when connected.
+                <p className="text-stone-700 mb-2.5 leading-relaxed font-medium">
+                  Offline-first cold start ready. Every write saves immediately to <strong>Local SQLite ({syncStatus.sqliteRowCount} rows)</strong> and dual-syncs with Cloud Firestore when connected.
                 </p>
-                <div className="bg-[#F5F5F0] p-2.5 border-2 border-[#141414] mb-3">
+
+                {/* Cloud Auth Status */}
+                <div className="bg-[#F5F5F0] p-2.5 border-2 border-[#141414] mb-2.5 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-[#141414] font-bold">Simulate Zero Data:</span>
+                    <span className="text-[10px] font-black uppercase flex items-center gap-1">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
+                      RLS Cloud ID:
+                    </span>
+                    <span className="font-mono text-[10px] font-black text-[#141414]">
+                      {authStatus.uid ? `${authStatus.uid.slice(0, 10)}...` : 'Local Queue'}
+                    </span>
+                  </div>
+                  {!authStatus.uid || authStatus.isAnonymous ? (
+                    <button
+                      type="button"
+                      onClick={handleGoogleSignIn}
+                      className="w-full py-1.5 px-2 bg-white hover:bg-[#141414] hover:text-white text-[#141414] border border-[#141414] font-black uppercase text-[10px] flex items-center justify-center gap-1.5 cursor-pointer transition"
+                    >
+                      <LogIn className="w-3 h-3 text-[#F27D26]" />
+                      <span>{authStatus.uid ? 'Link Google Account' : 'Sign In with Google to Sync'}</span>
+                    </button>
+                  ) : (
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="font-bold text-emerald-800 truncate">{authStatus.email || authStatus.displayName}</span>
+                      <button
+                        type="button"
+                        onClick={() => signOutCloud()}
+                        className="text-rose-700 font-black uppercase flex items-center gap-0.5 cursor-pointer"
+                      >
+                        <LogOut className="w-3 h-3" /> Out
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {syncStatus.lastSyncedAt && (
+                  <p className="text-[10px] font-black uppercase text-emerald-700 mb-2.5 flex items-center gap-1">
+                    <Check className="w-3 h-3" />
+                    Last cloud sync: {formatTimeAgo(syncStatus.lastSyncedAt)}
+                  </p>
+                )}
+
+                <div className="bg-[#F5F5F0] p-2.5 border-2 border-[#141414] mb-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[#141414] font-bold">Simulate Offline:</span>
                     <button
                       onClick={() => store.setOfflineSimulation(!isSimulated)}
                       className={`px-2.5 py-1 text-xs font-black uppercase border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] transition cursor-pointer ${
@@ -148,28 +267,34 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                     </button>
                   </div>
                 </div>
-                {pendingCount > 0 && (
-                  <button
-                    onClick={() => {
-                      store.flushOutbox();
-                      setShowSimInfo(false);
-                    }}
-                    className="w-full flex items-center justify-center gap-1.5 py-2 bg-[#141414] text-white uppercase font-black tracking-wider text-xs border-2 border-[#141414] hover:bg-[#F27D26] transition shadow-[2px_2px_0px_0px_#141414] cursor-pointer"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" /> Force Flush Outbox ({pendingCount})
-                  </button>
-                )}
+
+                <button
+                  onClick={() => {
+                    handleGlobalSync();
+                    setShowSimInfo(false);
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 bg-[#141414] text-white uppercase font-black tracking-wider text-xs border-2 border-[#141414] hover:bg-[#F27D26] transition shadow-[2px_2px_0px_0px_#141414] cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Global Dual Sync Now
+                </button>
               </div>
             )}
           </div>
         </div>
       </div>
 
+      {/* Global Sync Toast Strip */}
+      {syncNotice && (
+        <div className="bg-[#141414] text-white text-[11px] font-black uppercase tracking-wider text-center py-1 px-3 border-t border-stone-800">
+          {syncNotice}
+        </div>
+      )}
+
       {/* Navigation Tabs */}
       <div className="max-w-4xl mx-auto px-2 sm:px-4 flex border-t-2 border-[#141414] bg-[#F5F5F0] overflow-x-auto scrollbar-none">
         <button
           onClick={() => setActiveTab('routes')}
-          className={`flex-1 min-w-[105px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
+          className={`flex-1 min-w-[100px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
             activeTab === 'routes'
               ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
               : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'
@@ -182,7 +307,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
         <button
           id="nav-intercity-tab"
           onClick={() => setActiveTab('intercity')}
-          className={`flex-1 min-w-[115px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
+          className={`flex-1 min-w-[108px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
             activeTab === 'intercity'
               ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
               : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'
@@ -195,7 +320,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
         <button
           id="nav-transporters-tab"
           onClick={() => setActiveTab('transporters')}
-          className={`flex-1 min-w-[125px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
             activeTab === 'transporters'
               ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
               : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'
@@ -208,7 +333,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
         <button
           id="nav-buzz-tab"
           onClick={() => setActiveTab('buzz')}
-          className={`flex-1 min-w-[125px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
+          className={`flex-1 min-w-[140px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition border-r-2 border-[#141414] cursor-pointer ${
             activeTab === 'buzz'
               ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
               : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'
@@ -216,6 +341,14 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
         >
           <MessageSquare className="w-3.5 h-3.5 text-[#F27D26] flex-shrink-0" />
           <span className="truncate">Commuter Buzz</span>
+          {unreadNotifCount > 0 && (
+            <span
+              className="bg-red-600 text-white px-1.5 py-0.2 text-[10px] font-black leading-tight border border-white flex-shrink-0 animate-pulse"
+              title={`${unreadNotifCount} unread Commuter Buzz notifications`}
+            >
+              {unreadNotifCount > 99 ? '99+' : unreadNotifCount}
+            </span>
+          )}
         </button>
 
         <button
@@ -232,7 +365,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
 
         <button
           onClick={() => setActiveTab('my-reports')}
-          className={`flex-1 min-w-[120px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition cursor-pointer ${
+          className={`flex-1 min-w-[125px] flex items-center justify-center gap-1.5 py-3 px-2 text-xs font-black uppercase tracking-wider transition cursor-pointer ${
             activeTab === 'my-reports'
               ? 'bg-[#141414] text-white shadow-[inset_0_-2px_0_0_#F27D26]'
               : 'text-[#141414]/70 hover:text-[#141414] hover:bg-white'

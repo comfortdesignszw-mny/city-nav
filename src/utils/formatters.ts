@@ -1,4 +1,34 @@
-import { StatusType, Currency } from '../types';
+import { StatusType, Currency, DisplayCurrency } from '../types';
+
+export const CURRENCY_RATES_TO_USD: Record<Currency, number> = {
+  USD: 1,
+  ZWG: 28,
+  ZWL: 28,
+  ZAR: 18,
+  BWP: 13.5,
+};
+
+export const THREE_CURRENCIES: DisplayCurrency[] = ['USD', 'ZWG', 'ZAR'];
+
+export function normalizeCurrency(currency: Currency): DisplayCurrency {
+  if (currency === 'ZAR') return 'ZAR';
+  if (currency === 'ZWG' || currency === 'ZWL') return 'ZWG';
+  return 'USD';
+}
+
+export function convertCurrency(amount: number, from: Currency, to: Currency): number {
+  if (!amount || isNaN(amount)) return 0;
+  const fromNorm = from === 'ZWL' ? 'ZWG' : from;
+  const toNorm = to === 'ZWL' ? 'ZWG' : to;
+  if (fromNorm === toNorm) return amount;
+
+  const usdValue = amount / (CURRENCY_RATES_TO_USD[fromNorm] || 1);
+  const converted = usdValue * (CURRENCY_RATES_TO_USD[toNorm] || 1);
+
+  if (toNorm === 'USD') return Math.round(converted * 100) / 100;
+  if (toNorm === 'ZAR') return Math.round(converted * 2) / 2;
+  return Math.round(converted);
+}
 
 export function formatTimeAgo(timestamp: number): string {
   const diffMs = Date.now() - timestamp;
@@ -23,10 +53,16 @@ export function formatCurrency(amount: number, currency: Currency): string {
       return `R${Math.round(amount) === amount ? amount : amount.toFixed(1)}`;
     case 'BWP':
       return `P${Math.round(amount) === amount ? amount : amount.toFixed(1)}`;
+    case 'ZWG':
     case 'ZWL':
     default:
-      return `ZiG ${Math.round(amount)}`;
+      return `ZWG ${Math.round(amount)}`;
   }
+}
+
+export function formatDisplayFare(amount: number, originalCurrency: Currency, displayCurrency: DisplayCurrency): string {
+  const converted = convertCurrency(amount, originalCurrency, displayCurrency);
+  return formatCurrency(converted, displayCurrency);
 }
 
 export function getCurrencyMeta(currency: Currency): { symbol: string; name: string; regionNote: string } {
@@ -37,8 +73,9 @@ export function getCurrencyMeta(currency: Currency): { symbol: string; name: str
       return { symbol: 'R', name: 'SA Rand (ZAR)', regionNote: 'Widely used in Bulawayo, Gwanda & Beitbridge' };
     case 'BWP':
       return { symbol: 'P', name: 'Botswana Pula (BWP)', regionNote: 'Common in Plumtree, border & Mat South corridors' };
+    case 'ZWG':
     case 'ZWL':
-      return { symbol: 'ZiG', name: 'Zimbabwe Gold (ZiG)', regionNote: 'Official local currency' };
+      return { symbol: 'ZWG', name: 'Zimbabwe Gold (ZWG)', regionNote: 'Official Zimbabwe local currency' };
   }
 }
 

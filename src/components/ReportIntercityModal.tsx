@@ -12,7 +12,8 @@ import {
   Navigation
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
-import { IntercityRoute, BusOperator } from '../types';
+import { IntercityRoute, BusOperator, DisplayCurrency } from '../types';
+import { convertCurrency } from '../utils/formatters';
 
 interface ReportIntercityModalProps {
   isOpen: boolean;
@@ -38,7 +39,8 @@ export const ReportIntercityModal: React.FC<ReportIntercityModalProps> = ({
     defaultOperatorId || operators[0]?.id || ''
   );
   const [customOperatorName, setCustomOperatorName] = useState<string>('');
-  const [fareUSD, setFareUSD] = useState<string>('20');
+  const [fareCurrency, setFareCurrency] = useState<DisplayCurrency>('USD');
+  const [fareAmount, setFareAmount] = useState<string>('20');
   const [departureTerminal, setDepartureTerminal] = useState<string>('Harare Roadport Terminal');
   const [departureTime, setDepartureTime] = useState<string>('07:30 AM');
   const [seatAvailability, setSeatAvailability] = useState<'plenty' | 'filling_fast' | 'full'>('filling_fast');
@@ -51,21 +53,33 @@ export const ReportIntercityModal: React.FC<ReportIntercityModalProps> = ({
   const currentRoute = routes.find((r) => r.id === selectedRouteId);
   const currentOperator = operators.find((op) => op.id === selectedOperatorId);
 
+  const handleCurrencySelect = (nextCurr: DisplayCurrency) => {
+    const parsed = parseFloat(fareAmount) || 0;
+    const converted = parsed > 0 ? convertCurrency(parsed, fareCurrency, nextCurr) : (nextCurr === 'USD' ? 20 : nextCurr === 'ZWG' ? 560 : 360);
+    setFareCurrency(nextCurr);
+    setFareAmount(String(converted));
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const parsedFare = parseFloat(fareUSD);
+    const parsedFare = parseFloat(fareAmount);
     if (isNaN(parsedFare) || parsedFare <= 0) return;
 
     const opName = selectedOperatorId === 'custom' 
       ? (customOperatorName.trim() || 'Independent Coach')
       : (currentOperator?.name || 'Coach Operator');
 
+    const usdVal = convertCurrency(parsedFare, fareCurrency, 'USD');
+    const zwgVal = convertCurrency(parsedFare, fareCurrency, 'ZWG');
+    const zarVal = convertCurrency(parsedFare, fareCurrency, 'ZAR');
+
     store.addIntercityReport({
       routeId: selectedRouteId,
       operatorId: selectedOperatorId,
       operatorName: opName,
-      farePaidUSD: parsedFare,
-      farePaidZiG: Math.round(parsedFare * 14), // Current approximate intercity conversion
+      farePaidUSD: usdVal,
+      farePaidZiG: zwgVal,
+      farePaidZAR: zarVal,
       departureTime: departureTime.trim(),
       departureTerminal: departureTerminal.trim(),
       seatAvailability,
@@ -178,54 +192,85 @@ export const ReportIntercityModal: React.FC<ReportIntercityModalProps> = ({
               )}
             </div>
 
-            {/* Fare Paid Section */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] font-black uppercase tracking-wider text-[#141414] mb-1">
-                  Fare Paid (USD) *
+            {/* Fare Paid Section (3-Currency Switcher) */}
+            <div className="space-y-2.5 p-3 bg-[#F5F5F0] border-2 border-[#141414]">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-black uppercase tracking-wider text-[#141414]">
+                  Currency Paid (USD • ZWG • ZAR)
                 </label>
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-stone-500 font-black">
-                    $
-                  </span>
-                  <input
-                    id="intercity-fare-input"
-                    type="number"
-                    step="0.5"
-                    min="1"
-                    max="100"
-                    value={fareUSD}
-                    onChange={(e) => setFareUSD(e.target.value)}
-                    className="w-full pl-7 pr-3 py-2.5 bg-[#F5F5F0] border-2 border-[#141414] text-[#141414] font-black text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#F27D26] shadow-[2px_2px_0px_0px_#141414]"
-                    required
-                  />
+                <div className="inline-flex border-2 border-[#141414] bg-white">
+                  {(['USD', 'ZWG', 'ZAR'] as DisplayCurrency[]).map((curr) => (
+                    <button
+                      key={curr}
+                      type="button"
+                      onClick={() => handleCurrencySelect(curr)}
+                      className={`px-2.5 py-1 text-[10px] font-black uppercase cursor-pointer transition ${
+                        fareCurrency === curr
+                          ? 'bg-[#141414] text-[#F27D26]'
+                          : 'bg-white text-[#141414] hover:bg-stone-100'
+                      }`}
+                    >
+                      {curr}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              <div>
-                <label className="block text-[11px] font-black uppercase tracking-wider text-[#141414] mb-1">
-                  Approx. ZiG Equivalent
-                </label>
-                <div className="py-2.5 px-3 bg-[#F5F5F0] border-2 border-[#141414] font-black text-sm text-[#141414]">
-                  ZiG {Math.round((parseFloat(fareUSD) || 0) * 14)}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-[#141414] mb-1">
+                    Fare Paid ({fareCurrency}) *
+                  </label>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-stone-600 font-black text-xs">
+                      {fareCurrency === 'USD' ? '$' : fareCurrency === 'ZAR' ? 'R' : 'ZWG'}
+                    </span>
+                    <input
+                      id="intercity-fare-input"
+                      type="number"
+                      step="0.5"
+                      min="1"
+                      max="10000"
+                      value={fareAmount}
+                      onChange={(e) => setFareAmount(e.target.value)}
+                      className="w-full pl-11 pr-3 py-2 bg-white border-2 border-[#141414] text-[#141414] font-black text-sm focus:outline-none focus:ring-2 focus:ring-[#F27D26]"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-[#141414] mb-1">
+                    Multi-Currency Equivalents
+                  </label>
+                  <div className="py-2 px-2.5 bg-white border-2 border-[#141414] font-black text-[11px] text-[#141414] flex flex-wrap gap-x-2">
+                    <span>${convertCurrency(parseFloat(fareAmount) || 0, fareCurrency, 'USD')} USD</span>
+                    <span>• ZWG {convertCurrency(parseFloat(fareAmount) || 0, fareCurrency, 'ZWG')}</span>
+                    <span>• R{convertCurrency(parseFloat(fareAmount) || 0, fareCurrency, 'ZAR')}</span>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Quick Fare Presets */}
-            <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-              {['10', '12', '15', '18', '20', '25', '30'].map((amt) => (
-                <button
-                  type="button"
-                  key={amt}
-                  onClick={() => setFareUSD(amt)}
-                  className={`px-2.5 py-1 text-[11px] font-black border-2 border-[#141414] transition cursor-pointer ${
-                    fareUSD === amt ? 'bg-[#141414] text-white' : 'bg-white text-[#141414] hover:bg-[#F5F5F0]'
-                  }`}
-                >
-                  ${amt}
-                </button>
-              ))}
+              {/* Quick Fare Presets */}
+              <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+                {(fareCurrency === 'USD'
+                  ? ['10', '12', '15', '18', '20', '25', '30']
+                  : fareCurrency === 'ZAR'
+                  ? ['180', '250', '300', '360', '450', '550']
+                  : ['280', '350', '420', '560', '700', '840']
+                ).map((amt) => (
+                  <button
+                    type="button"
+                    key={amt}
+                    onClick={() => setFareAmount(amt)}
+                    className={`px-2.5 py-1 text-[11px] font-black border-2 border-[#141414] transition cursor-pointer ${
+                      fareAmount === amt ? 'bg-[#141414] text-white' : 'bg-white text-[#141414] hover:bg-stone-100'
+                    }`}
+                  >
+                    {fareCurrency === 'USD' ? `$${amt}` : fareCurrency === 'ZAR' ? `R${amt}` : `ZWG ${amt}`}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Departure Terminal & Time */}

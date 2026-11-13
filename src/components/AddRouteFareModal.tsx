@@ -93,6 +93,7 @@ export const AddRouteFareModal: React.FC<AddRouteFareModalProps> = ({
   const [commuterNote, setCommuterNote] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
 
   if (!isOpen) return null;
@@ -104,15 +105,16 @@ export const AddRouteFareModal: React.FC<AddRouteFareModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
 
     if (!origin.trim() || !destination.trim()) {
-      alert('Please provide both an origin and a destination.');
+      setFormError('Please provide both an origin and a destination.');
       return;
     }
 
     const numFare = parseFloat(fareAmount);
     if (isNaN(numFare) || numFare <= 0) {
-      alert('Please enter a valid fare amount.');
+      setFormError('Please enter a valid fare amount.');
       return;
     }
 
@@ -189,6 +191,12 @@ export const AddRouteFareModal: React.FC<AddRouteFareModalProps> = ({
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4 text-xs font-bold">
+            {formError && (
+              <div className="p-2.5 bg-rose-100 border-2 border-[#141414] text-rose-950 font-black text-xs flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-700 shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
             {/* City & Category */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -338,34 +346,33 @@ export const AddRouteFareModal: React.FC<AddRouteFareModalProps> = ({
                   <span>Current Fare Charged *</span>
                 </label>
                 <span className="text-[9px] font-bold text-stone-500">
-                  Rands (Byo) • Pula (Plumtree)
+                  USD ($) • ZWG • Rands (ZAR)
                 </span>
               </div>
 
-              <div className="grid grid-cols-4 gap-1.5 mb-2">
-                {(['USD', 'ZWL', 'ZAR', 'BWP'] as Currency[]).map((curr) => (
+              <div className="grid grid-cols-3 gap-1.5 mb-2">
+                {(['USD', 'ZWG', 'ZAR'] as Currency[]).map((curr) => (
                   <button
                     key={curr}
                     type="button"
                     onClick={() => {
                       setCurrency(curr);
                       if (curr === 'USD') setFareAmount('1.00');
-                      if (curr === 'ZWL') setFareAmount('25');
-                      if (curr === 'ZAR') setFareAmount('15');
-                      if (curr === 'BWP') setFareAmount('20');
+                      if (curr === 'ZWG') setFareAmount('28');
+                      if (curr === 'ZAR') setFareAmount('18');
                     }}
                     className={`py-1.5 text-xs font-black uppercase border-2 border-[#141414] transition cursor-pointer ${
                       currency === curr ? 'bg-[#141414] text-white shadow-[2px_2px_0px_0px_#F27D26]' : 'bg-white text-[#141414]'
                     }`}
                   >
-                    {curr === 'USD' ? 'USD ($)' : curr === 'ZWL' ? 'ZiG' : curr === 'ZAR' ? 'Rand (R)' : 'Pula (P)'}
+                    {curr === 'USD' ? 'USD ($)' : curr === 'ZWG' ? 'ZWG' : 'ZAR (R)'}
                   </button>
                 ))}
               </div>
 
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500 font-black text-xs">
-                  {currency === 'USD' ? '$' : currency === 'ZWL' ? 'ZiG' : currency === 'ZAR' ? 'R' : 'P'}
+                  {currency === 'USD' ? '$' : currency === 'ZWG' || currency === 'ZWL' ? 'ZWG' : 'R'}
                 </span>
                 <input
                   type="number"
@@ -373,7 +380,7 @@ export const AddRouteFareModal: React.FC<AddRouteFareModalProps> = ({
                   value={fareAmount}
                   onChange={(e) => setFareAmount(e.target.value)}
                   placeholder="1.00"
-                  className="w-full pl-10 pr-3 py-2 bg-white border-2 border-[#141414] font-black text-sm focus:outline-none"
+                  className="w-full pl-12 pr-3 py-2 bg-white border-2 border-[#141414] font-black text-sm focus:outline-none"
                   required
                 />
               </div>
@@ -384,9 +391,7 @@ export const AddRouteFareModal: React.FC<AddRouteFareModalProps> = ({
                   ? ['0.50', '0.75', '1.00', '1.50', '2.00'] 
                   : currency === 'ZAR' 
                   ? ['10', '15', '20', '30', '50'] 
-                  : currency === 'BWP' 
-                  ? ['10', '15', '20', '25', '50'] 
-                  : ['14', '20', '28', '42', '55']
+                  : ['15', '20', '28', '40', '55']
                 ).map((val) => (
                   <button
                     key={val}
@@ -394,7 +399,7 @@ export const AddRouteFareModal: React.FC<AddRouteFareModalProps> = ({
                     onClick={() => setFareAmount(val)}
                     className="px-2.5 py-1 bg-white border border-[#141414] text-[10px] font-black hover:bg-[#F27D26] hover:text-white transition cursor-pointer"
                   >
-                    {currency === 'USD' ? `$${val}` : currency === 'ZAR' ? `R${val}` : currency === 'BWP' ? `P${val}` : `${val} ZiG`}
+                    {currency === 'USD' ? `$${val}` : currency === 'ZAR' ? `R${val}` : `ZWG ${val}`}
                   </button>
                 ))}
               </div>
