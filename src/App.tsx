@@ -13,13 +13,15 @@ import { RankFinderView } from './components/RankFinderView';
 import { MyReportsView } from './components/MyReportsView';
 import { RouteDetailModal } from './components/RouteDetailModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
-import { Info, Bus, ShieldCheck, Zap } from 'lucide-react';
+import { LegalDocsModal, LegalDocTab } from './components/LegalDocsModal';
+import { FileText, Lock, ShieldCheck } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('routes');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [selectedRankId, setSelectedRankId] = useState<string | null>(null);
   const [showWelcomeNotice, setShowWelcomeNotice] = useState(true);
+  const [legalDocTab, setLegalDocTab] = useState<LegalDocTab | null>(null);
 
   const handleSelectRoute = (routeId: string) => {
     setSelectedRouteId(routeId);
@@ -59,6 +61,26 @@ export default function App() {
                   <p className="text-xs sm:text-sm font-medium text-stone-300 leading-snug max-w-2xl">
                     Crowdsourced transit intelligence for Zimbabwe. Instant offline SQLite &amp; cloud sync, live 3-currency fares (USD, ZWG, ZAR), one-tap boarding check-ins, verified transporters &amp; kombis, and community reviews.
                   </p>
+                  <div className="pt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs font-bold text-white border-t border-stone-700/80 mt-2">
+                    <ShieldCheck className="w-3.5 h-3.5 text-[#F27D26] flex-shrink-0" />
+                    <span>Read our</span>
+                    <button
+                      type="button"
+                      onClick={() => setLegalDocTab('terms')}
+                      className="underline decoration-[#F27D26] decoration-2 underline-offset-2 text-[#F27D26] hover:text-white font-black uppercase tracking-wide cursor-pointer transition"
+                    >
+                      Terms of Use
+                    </button>
+                    <span>and</span>
+                    <button
+                      type="button"
+                      onClick={() => setLegalDocTab('privacy')}
+                      className="underline decoration-[#F27D26] decoration-2 underline-offset-2 text-[#F27D26] hover:text-white font-black uppercase tracking-wide cursor-pointer transition"
+                    >
+                      Privacy Policy
+                    </button>
+                    <span>before using this app.</span>
+                  </div>
                 </div>
               </div>
               <button
@@ -115,10 +137,28 @@ export default function App() {
       </main>
 
       {/* Bold Typography Theme Footer */}
-      <footer className="p-4 sm:p-6 border-t-2 border-[#141414] bg-[#F5F5F0] flex flex-col sm:flex-row justify-between items-center gap-2 text-[10px] font-black uppercase tracking-widest text-[#141414]/70 mt-auto">
+      <footer className="p-4 sm:p-6 border-t-2 border-[#141414] bg-[#F5F5F0] flex flex-col sm:flex-row justify-between items-center gap-3 text-[10px] font-black uppercase tracking-widest text-[#141414]/70 mt-auto">
         <span>Commuter Crowdsourcing Engine v1.0.4</span>
         <span>© Fambai Hambani Travel Network • Harare, ZW</span>
-        <span>Built for Low-Connectivity Environments</span>
+        <div className="flex items-center gap-3 flex-wrap justify-center">
+          <button
+            type="button"
+            onClick={() => setLegalDocTab('terms')}
+            className="inline-flex items-center gap-1 text-[#141414] hover:text-[#F27D26] underline underline-offset-2 cursor-pointer transition"
+          >
+            <FileText className="w-3 h-3" />
+            <span>Terms of Use</span>
+          </button>
+          <span aria-hidden="true">•</span>
+          <button
+            type="button"
+            onClick={() => setLegalDocTab('privacy')}
+            className="inline-flex items-center gap-1 text-[#141414] hover:text-[#F27D26] underline underline-offset-2 cursor-pointer transition"
+          >
+            <Lock className="w-3 h-3" />
+            <span>Privacy Policy</span>
+          </button>
+        </div>
       </footer>
 
       {/* Route Detail Modal */}
@@ -130,6 +170,14 @@ export default function App() {
           onSelectRank={handleSelectRank}
         />
       )}
+
+      {/* Legal Docs Modal (Terms of Use & Privacy Policy) */}
+      <LegalDocsModal
+        isOpen={legalDocTab !== null}
+        activeDoc={legalDocTab || 'terms'}
+        onChangeDoc={(tab) => setLegalDocTab(tab)}
+        onClose={() => setLegalDocTab(null)}
+      />
 
       {/* Offline Toast & Outbox Sync Indicator */}
       <OfflineIndicator />
