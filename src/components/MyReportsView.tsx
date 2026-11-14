@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   ShieldCheck, 
   CloudUpload, 
@@ -28,7 +28,7 @@ import { useOfflineStore } from '../hooks/useOfflineStore';
 import { formatTimeAgo, formatCurrency, formatDisplayFare, getStatusConfig } from '../utils/formatters';
 import { PWAInstallButton } from './PWAInstallButton';
 import { AddRouteFareModal } from './AddRouteFareModal';
-import { generateGuestUsername, signInWithGoogle, signOutCloud } from '../services/firebase';
+import { generateGuestUsername, signInWithGoogle } from '../services/firebase';
 
 interface MyReportsViewProps {
   onSelectRoute: (routeId: string) => void;
@@ -71,11 +71,14 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
   const syncStatus = store.getSyncStatus();
   const displayCurrency = store.getDisplayCurrency();
   const [globalSyncBanner, setGlobalSyncBanner] = useState<string | null>(null);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const isLoggedOut = store.isLoggedOut() && !authStatus.uid;
 
   // Profile Form States
   const [nameInput, setNameInput] = useState(profile.name || '');
-  const [usernameInput, setUsernameInput] = useState(profile.username || 'Commuter');
-  const [handleInput, setHandleInput] = useState(profile.handle || '@commuter');
+  const [usernameInput, setUsernameInput] = useState(profile.username || '');
+  const [handleInput, setHandleInput] = useState(profile.handle || '');
   const [phoneInput, setPhoneInput] = useState(profile.phone || '');
   const [avatarColor, setAvatarColor] = useState(profile.avatarColor || '#F27D26');
   const [badge, setBadge] = useState(profile.commuterBadge || 'Daily Commuter');
@@ -86,6 +89,25 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
   const [activeSubTab, setActiveSubTab] = useState<'my-reports' | 'outbox'>('my-reports');
   const [isAddReportOpen, setIsAddReportOpen] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+
+  useEffect(() => {
+    if (!isEditingProfile) {
+      setNameInput(profile.name || '');
+      setUsernameInput(profile.username || '');
+      setHandleInput(profile.handle || '');
+      setPhoneInput(profile.phone || '');
+      setAvatarColor(profile.avatarColor || '#F27D26');
+      setBadge(profile.commuterBadge || 'Daily Commuter');
+    }
+  }, [
+    isEditingProfile,
+    profile.name,
+    profile.username,
+    profile.handle,
+    profile.phone,
+    profile.avatarColor,
+    profile.commuterBadge,
+  ]);
 
   const handleCopyDeviceId = () => {
     if (navigator.clipboard) {
@@ -152,6 +174,24 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
     setTimeout(() => setGlobalSyncBanner(null), 5000);
   };
 
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await store.logoutAndClearPersonalData();
+      setIsEditingProfile(false);
+      setNameInput('');
+      setUsernameInput('');
+      setHandleInput('');
+      setPhoneInput('');
+      setGlobalSyncBanner(
+        'Signed out cleanly. Personal info and My Submissions were removed; global fares, routes & buzz remain visible.'
+      );
+      setTimeout(() => setGlobalSyncBanner(null), 6000);
+    } finally {
+      setLoggingOut(false);
+    }
+  };
+
   return (
     <div className="space-y-5 pb-12">
       {/* SECTION 1: UNIFIED COMMUTER PROFILE & IDENTITY CARD */}
@@ -160,70 +200,106 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
           <div className="flex items-center gap-3">
             <div 
               className="w-12 h-12 border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] flex items-center justify-center font-black text-xl text-white flex-shrink-0"
-              style={{ backgroundColor: profile.avatarColor || '#F27D26' }}
+              style={{ backgroundColor: isLoggedOut ? '#141414' : profile.avatarColor || '#F27D26' }}
             >
-              {profile.username ? profile.username.charAt(0).toUpperCase() : 'C'}
+              {isLoggedOut
+                ? '?'
+                : profile.username
+                ? profile.username.charAt(0).toUpperCase()
+                : 'C'}
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-base sm:text-lg font-black text-[#141414] uppercase tracking-tight">
-                  {profile.name ? profile.name : profile.username || 'Anonymous Commuter'}
+                  {isLoggedOut
+                    ? 'Signed Out'
+                    : profile.name
+                    ? profile.name
+                    : profile.username || 'Guest Commuter'}
                 </h2>
-                <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 bg-[#141414] text-white border border-[#141414]">
-                  {profile.commuterBadge || 'Daily Commuter'}
-                </span>
+                {!isLoggedOut && profile.commuterBadge && (
+                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 bg-[#141414] text-white border border-[#141414]">
+                    {profile.commuterBadge}
+                  </span>
+                )}
                 <span
                   className={`text-[10px] font-black uppercase tracking-wider px-2 py-0.5 border border-[#141414] ${
-                    !authStatus.uid || authStatus.isAnonymous
+                    isLoggedOut
+                      ? 'bg-stone-200 text-stone-800'
+                      : !authStatus.uid || authStatus.isAnonymous
                       ? 'bg-[#F27D26]/20 text-[#141414]'
                       : 'bg-emerald-100 text-emerald-900'
                   }`}
                 >
-                  {!authStatus.uid || authStatus.isAnonymous ? 'Guest Account' : 'Google Linked'}
+                  {isLoggedOut
+                    ? 'Signed Out'
+                    : !authStatus.uid || authStatus.isAnonymous
+                    ? 'Guest / Anonymous'
+                    : 'Google Signed In'}
                 </span>
               </div>
-              <div className="flex items-center gap-2 text-xs font-bold text-stone-600 mt-0.5 flex-wrap">
-                <span className="text-[#F27D26] font-black">{profile.handle || '@commuter'}</span>
-                {profile.phone && (
-                  <span className="text-stone-700 font-semibold" title="Private PII (only visible to you)">
-                    • Private Tel: {profile.phone}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                <span className="font-mono text-[10px] text-stone-700 bg-[#F5F5F0] px-1.5 py-0.5 border border-stone-300 break-all">
-                  User ID: {userId}
-                </span>
-                <span className="font-mono text-[10px] text-stone-600 bg-[#F5F5F0] px-1.5 py-0.5 border border-stone-300 break-all">
-                  Device ID: {deviceId}
-                </span>
-                <button
-                  onClick={handleCopyDeviceId}
-                  className="text-[#141414] hover:text-[#F27D26] flex items-center gap-0.5 font-black uppercase text-[10px] cursor-pointer"
-                  title="Copy User ID & Device ID"
-                >
-                  <Copy className="w-3 h-3" />
-                  <span>{copiedId ? 'Copied' : 'Copy IDs'}</span>
-                </button>
-              </div>
+              {isLoggedOut ? (
+                <p className="text-xs font-bold text-stone-600 mt-1">
+                  Personal profile data &amp; My Submissions cleared. All global contributions remain visible.
+                </p>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2 text-xs font-bold text-stone-600 mt-0.5 flex-wrap">
+                    <span className="text-[#F27D26] font-black">{profile.handle || '@commuter'}</span>
+                    {profile.phone && (
+                      <span className="text-stone-700 font-semibold" title="Private PII (only visible to you)">
+                        • Private Tel: {profile.phone}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                    <span className="font-mono text-[10px] text-stone-700 bg-[#F5F5F0] px-1.5 py-0.5 border border-stone-300 break-all">
+                      User ID: {userId}
+                    </span>
+                    <span className="font-mono text-[10px] text-stone-600 bg-[#F5F5F0] px-1.5 py-0.5 border border-stone-300 break-all">
+                      Device ID: {deviceId}
+                    </span>
+                    <button
+                      onClick={handleCopyDeviceId}
+                      className="text-[#141414] hover:text-[#F27D26] flex items-center gap-0.5 font-black uppercase text-[10px] cursor-pointer"
+                      title="Copy User ID & Device ID"
+                    >
+                      <Copy className="w-3 h-3" />
+                      <span>{copiedId ? 'Copied' : 'Copy IDs'}</span>
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
-          {/* Reputation Score & Edit Action */}
+          {/* Reputation Score, Edit & Sign Out Actions */}
           <div className="flex items-center gap-2 sm:flex-col sm:items-end justify-between">
             <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#F27D26] text-white border-2 border-[#141414] font-black text-xs sm:text-sm shadow-[2px_2px_0px_0px_#141414]">
               <ShieldCheck className="w-4 h-4 text-white" />
-              <span>{profile.reputation_score} PTS</span>
+              <span>{isLoggedOut ? 0 : profile.reputation_score} PTS</span>
             </div>
 
-            {!isEditingProfile && (
-              <button
-                onClick={() => setIsEditingProfile(true)}
-                className="px-3 py-1 bg-white hover:bg-[#141414] hover:text-white text-[#141414] text-xs font-black uppercase tracking-wider transition border border-[#141414] shadow-[1px_1px_0px_0px_#141414] flex items-center gap-1.5 cursor-pointer mt-1"
-              >
-                <Edit3 className="w-3.5 h-3.5 text-[#F27D26]" />
-                <span>Edit Profile</span>
-              </button>
+            {!isLoggedOut && !isEditingProfile && (
+              <div className="flex items-center gap-1.5 mt-1 flex-wrap justify-end">
+                <button
+                  onClick={() => setIsEditingProfile(true)}
+                  className="px-3 py-1 bg-white hover:bg-[#141414] hover:text-white text-[#141414] text-xs font-black uppercase tracking-wider transition border border-[#141414] shadow-[1px_1px_0px_0px_#141414] flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Edit3 className="w-3.5 h-3.5 text-[#F27D26]" />
+                  <span>Edit Profile</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  disabled={loggingOut}
+                  className="px-3 py-1 bg-red-50 hover:bg-red-600 hover:text-white text-red-700 text-xs font-black uppercase tracking-wider transition border border-[#141414] shadow-[1px_1px_0px_0px_#141414] flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  title="Sign out and remove all personal profile info & My Submissions from this device"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>{loggingOut ? 'Signing Out...' : 'Sign Out'}</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -377,6 +453,37 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
               </button>
             </div>
           </form>
+        ) : isLoggedOut ? (
+          <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414] space-y-2.5 text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <span className="font-black text-[#141414] uppercase">
+                  Signed Out — No Personal Data Stored on Device
+                </span>
+                <p className="text-[11px] font-medium text-stone-600 mt-0.5">
+                  Your name, username, phone number, and My Submissions were cleared. Global fares, routes, and buzz remain visible.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => handleContinueAsGuest(true)}
+                  className="px-3 py-1.5 bg-[#F27D26] hover:bg-[#d96615] text-white text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition"
+                >
+                  <UserCheck className="w-3 h-3" />
+                  <span>Continue as Guest</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  className="px-3 py-1.5 bg-[#141414] hover:bg-[#F27D26] text-white text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition"
+                >
+                  <LogIn className="w-3 h-3 text-[#F27D26]" />
+                  <span>Sign In with Google</span>
+                </button>
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414] space-y-2 text-xs">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -384,10 +491,10 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                 <span className="font-black text-[#141414] uppercase">
                   {!authStatus.uid || authStatus.isAnonymous
                     ? `Guest Cloud Identity (${profile.username}) • Owner RLS Active`
-                    : 'Google Verified • Owner Role-Level Security (RLS) Active'}
+                    : `Google Verified (${authStatus.email?.split('@')[0] || profile.username}) • Owner RLS Active`}
                 </span>
                 <p className="text-[11px] font-medium text-stone-600 mt-0.5">
-                  Only you can edit or delete your submissions &amp; phone number. Guest &amp; Google contributions sync globally.
+                  Only you can edit or delete your submissions &amp; phone number. Signing out clears your personal info and My Submissions while keeping global contributions live.
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
@@ -421,15 +528,25 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                       <LogIn className="w-3 h-3 text-[#F27D26]" />
                       <span>{authStatus.uid ? 'Link Google Account' : 'Sign In with Google'}</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={handleLogout}
+                      disabled={loggingOut}
+                      className="px-2.5 py-1 bg-white hover:bg-red-600 hover:text-white text-red-700 text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition disabled:opacity-60"
+                    >
+                      <LogOut className="w-3 h-3" />
+                      <span>{loggingOut ? 'Logging Out...' : 'Log Out'}</span>
+                    </button>
                   </>
                 ) : (
                   <button
                     type="button"
-                    onClick={() => signOutCloud()}
-                    className="px-2.5 py-1 bg-white hover:bg-red-50 text-red-700 text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition"
+                    onClick={handleLogout}
+                    disabled={loggingOut}
+                    className="px-2.5 py-1 bg-white hover:bg-red-600 hover:text-white text-red-700 text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition disabled:opacity-60"
                   >
                     <LogOut className="w-3 h-3" />
-                    <span>Google Linked ({authStatus.email?.split('@')[0]})</span>
+                    <span>{loggingOut ? 'Logging Out...' : `Sign Out (${authStatus.email?.split('@')[0]})`}</span>
                   </button>
                 )}
               </div>

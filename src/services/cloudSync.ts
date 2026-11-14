@@ -768,6 +768,34 @@ export async function pullAllFromCloud(currentDeviceId?: string): Promise<CloudS
   };
 }
 
+export async function deletePersonalCloudProfile(deviceId: string): Promise<void> {
+  const user = auth.currentUser;
+  if (!user || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+  const uid = user.uid;
+
+  const tryDeleteOwnedDoc = async (refPath: string, docRef: ReturnType<typeof doc>) => {
+    try {
+      const snap = await getDoc(docRef);
+      if (!snap.exists()) return;
+      const data = snap.data() as { ownerUid?: string } | undefined;
+      if (data?.ownerUid === uid) {
+        await deleteDoc(docRef);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, refPath);
+    }
+  };
+
+  await Promise.allSettled([
+    tryDeleteOwnedDoc(`commuters/${deviceId}/private/contact`, doc(db, 'commuters', deviceId, 'private', 'contact')),
+    tryDeleteOwnedDoc(`commuters/${deviceId}`, doc(db, 'commuters', deviceId)),
+    uid !== deviceId
+      ? tryDeleteOwnedDoc(`commuters/${uid}`, doc(db, 'commuters', uid))
+      : Promise.resolve(),
+    tryDeleteOwnedDoc(`location_anchors/${deviceId}`, doc(db, 'location_anchors', deviceId)),
+  ]);
+}
+
 export function subscribeToCloudCollections(
   onCollectionUpdate: <K extends keyof CloudSnapshotData>(key: K, data: CloudSnapshotData[K]) => void,
   uid?: string | null

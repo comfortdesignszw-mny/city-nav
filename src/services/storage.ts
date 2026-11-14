@@ -49,17 +49,20 @@ import { calculateDistanceKm, DEFAULT_USER_LOCATION } from '../utils/geoUtils';
 import { sqliteDb } from './sqliteDb';
 import {
   auth,
+  clearSavedGuestUsername,
   continueAsGuest,
   ensureCloudAuth,
   generateGuestUsername,
   getCurrentAuthStatus,
   getOrCreateGuestUsername,
   saveGuestUsername,
+  signOutCloud,
   subscribeAuthState,
   syncFirebaseDisplayName,
 } from './firebase';
 import {
   CloudSnapshotData,
+  deletePersonalCloudProfile,
   pullAllFromCloud,
   pushPendingWriteToCloud,
   subscribeToCloudCollections,
@@ -90,6 +93,7 @@ const STORAGE_KEYS = {
   LOCATION_ANCHORS: 'fambai_location_anchors',
   LAST_SYNCED_AT: 'fambai_last_synced_at',
   PRODUCTION_CLEAN: 'fambai_production_clean_v1',
+  EXPLICIT_LOGOUT: 'fambai_explicit_logout',
 };
 
 export function getOrCreateDeviceId(): string {
@@ -161,9 +165,11 @@ class FambaiOfflineStore {
   private lastVisibilitySyncAt: number = 0;
   private cloudUnsubscribe: (() => void) | null = null;
   private activeSubscribedUid: string | null = null;
+  private isExplicitlyLoggedOut: boolean = false;
 
   constructor() {
     this.deviceId = getOrCreateDeviceId();
+    this.isExplicitlyLoggedOut = safeGet<boolean>(STORAGE_KEYS.EXPLICIT_LOGOUT, false);
     this.simulatedOffline = safeGet<boolean>(STORAGE_KEYS.OFFLINE_SIMULATION, false);
     this.displayCurrency = safeGet<DisplayCurrency>(STORAGE_KEYS.DISPLAY_CURRENCY, 'USD');
     this.lastSyncedAt = safeGet<number | null>(STORAGE_KEYS.LAST_SYNCED_AT, null);
@@ -187,59 +193,80 @@ class FambaiOfflineStore {
     // 1. Instant Cold-Start Offline Cache Hydration (zero internet required)
     this.initFromLocalCache();
 
-    // 2. Setup user profile with auto-assigned User ID + Device ID + random Guest username (e.g. guest_FxD12)
-    const existingProfile = safeGet<UserProfile | null>(STORAGE_KEYS.USER_PROFILE, null);
-    const guestName = getOrCreateGuestUsername();
-    const localAssignedUserId = `usr-${this.deviceId}`;
-    if (existingProfile) {
-      const isUntouchedLegacyDefault =
-        existingProfile.username?.startsWith('Commuter_') &&
-        !existingProfile.name &&
-        !existingProfile.ownerUid;
-      const resolvedUsername = isUntouchedLegacyDefault
-        ? guestName
-        : existingProfile.username || guestName;
-      const resolvedHandle = isUntouchedLegacyDefault
-        ? `@${guestName.toLowerCase()}`
-        : existingProfile.handle || `@${resolvedUsername.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
-
-      this.userProfile = {
-        ...existingProfile,
-        device_id: this.deviceId,
-        userId: existingProfile.userId || existingProfile.ownerUid || localAssignedUserId,
-        username: resolvedUsername,
-        handle: resolvedHandle,
-        avatarColor: existingProfile.avatarColor || '#F27D26',
-        commuterBadge: existingProfile.commuterBadge || 'Daily Commuter',
-        role: existingProfile.role || 'commuter',
-        isGuest:
-          existingProfile.isGuest !== undefined
-            ? existingProfile.isGuest
-            : existingProfile.authProvider !== 'google',
-        authProvider: existingProfile.authProvider || 'anonymous',
-        updatedAt: existingProfile.updatedAt || Date.now(),
-      };
-      safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
-    } else {
+    // 2. Setup user profile (cleared if explicitly logged out, otherwise auto-assigned User ID + Device ID + Guest username)
+    if (this.isExplicitlyLoggedOut) {
       this.userProfile = {
         device_id: this.deviceId,
-        userId: localAssignedUserId,
-        username: guestName,
-        handle: `@${guestName.toLowerCase()}`,
-        avatarColor: '#F27D26',
-        commuterBadge: 'Daily Commuter',
+        userId: '',
+        username: '',
+        handle: '',
+        name: undefined,
+        phone: undefined,
+        ownerUid: undefined,
+        avatarColor: '#141414',
+        commuterBadge: '',
         role: 'commuter',
-        isGuest: true,
-        authProvider: 'anonymous',
-        reputation_score: 100,
+        isGuest: false,
+        authProvider: undefined,
+        reputation_score: 0,
         reports_count: 0,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        createdAt: 0,
+        updatedAt: 0,
       };
-      safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
-    }
+    } else {
+      const existingProfile = safeGet<UserProfile | null>(STORAGE_KEYS.USER_PROFILE, null);
+      const guestName = getOrCreateGuestUsername();
+      const localAssignedUserId = `usr-${this.deviceId}`;
+      if (existingProfile) {
+        const isUntouchedLegacyDefault =
+          existingProfile.username?.startsWith('Commuter_') &&
+          !existingProfile.name &&
+          !existingProfile.ownerUid;
+        const resolvedUsername = isUntouchedLegacyDefault
+          ? guestName
+          : existingProfile.username || guestName;
+        const resolvedHandle = isUntouchedLegacyDefault
+          ? `@${guestName.toLowerCase()}`
+          : existingProfile.handle || `@${resolvedUsername.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
 
-    this.ensureLocalUserInDirectory();
+        this.userProfile = {
+          ...existingProfile,
+          device_id: this.deviceId,
+          userId: existingProfile.userId || existingProfile.ownerUid || localAssignedUserId,
+          username: resolvedUsername,
+          handle: resolvedHandle,
+          avatarColor: existingProfile.avatarColor || '#F27D26',
+          commuterBadge: existingProfile.commuterBadge || 'Daily Commuter',
+          role: existingProfile.role || 'commuter',
+          isGuest:
+            existingProfile.isGuest !== undefined
+              ? existingProfile.isGuest
+              : existingProfile.authProvider !== 'google',
+          authProvider: existingProfile.authProvider || 'anonymous',
+          updatedAt: existingProfile.updatedAt || Date.now(),
+        };
+        safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+      } else {
+        this.userProfile = {
+          device_id: this.deviceId,
+          userId: localAssignedUserId,
+          username: guestName,
+          handle: `@${guestName.toLowerCase()}`,
+          avatarColor: '#F27D26',
+          commuterBadge: 'Daily Commuter',
+          role: 'commuter',
+          isGuest: true,
+          authProvider: 'anonymous',
+          reputation_score: 100,
+          reports_count: 0,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+      }
+
+      this.ensureLocalUserInDirectory();
+    }
 
     // 3. Initialize Local SQLite + Firebase Auth + Bidirectional Cloud Sync
     this.initSqliteAndCloud();
@@ -297,9 +324,11 @@ class FambaiOfflineStore {
       clearTimeout(this.fastRetryTimer);
       this.fastRetryTimer = null;
     }
-    await ensureCloudAuth(true, this.userProfile.username);
+    if (!this.isExplicitlyLoggedOut) {
+      await ensureCloudAuth(true, this.userProfile.username);
+    }
     this.attachCloudListeners();
-    await this.globalSyncNow({ force: true, reconcileLocal: true });
+    await this.globalSyncNow({ force: true, reconcileLocal: !this.isExplicitlyLoggedOut });
   }
 
   private backfillLocalOwnerUid(uid: string): void {
@@ -414,9 +443,22 @@ class FambaiOfflineStore {
       this.currentAuthUid = uid;
       if (uid && user) {
         initialAuthHandled = true;
+        this.isExplicitlyLoggedOut = false;
+        try {
+          localStorage.removeItem(STORAGE_KEYS.EXPLICIT_LOGOUT);
+        } catch {
+          // Ignore storage error
+        }
         this.backfillLocalOwnerUid(uid);
         const nextIsGuest = !!user.isAnonymous;
         const nextProvider: 'anonymous' | 'google' = user.isAnonymous ? 'anonymous' : 'google';
+        const nextUsername =
+          this.userProfile.username ||
+          (!user.isAnonymous && user.displayName
+            ? user.displayName.trim().replace(/\s+/g, '_').slice(0, 32)
+            : getOrCreateGuestUsername());
+        const nextHandle =
+          this.userProfile.handle || `@${nextUsername.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
         const nextName =
           !user.isAnonymous && user.displayName && !this.userProfile.name
             ? user.displayName
@@ -427,15 +469,24 @@ class FambaiOfflineStore {
           this.userProfile.ownerUid !== uid ||
           !this.userProfile.userId ||
           this.userProfile.userId.startsWith('usr-zw-') ||
+          this.userProfile.username !== nextUsername ||
+          this.userProfile.handle !== nextHandle ||
           this.userProfile.isGuest !== nextIsGuest ||
           this.userProfile.authProvider !== nextProvider ||
           nextName !== this.userProfile.name
         ) {
           this.userProfile = {
             ...this.userProfile,
+            device_id: this.deviceId,
             ownerUid: uid,
             userId: uid,
+            username: nextUsername,
+            handle: nextHandle,
             name: nextName,
+            avatarColor: this.userProfile.avatarColor || '#F27D26',
+            commuterBadge: this.userProfile.commuterBadge || 'Daily Commuter',
+            reputation_score: this.userProfile.reputation_score || 100,
+            createdAt: this.userProfile.createdAt || Date.now(),
             isGuest: nextIsGuest,
             authProvider: nextProvider,
             updatedAt: Date.now(),
@@ -463,7 +514,9 @@ class FambaiOfflineStore {
     });
 
     if (this.isEffectivelyOnline()) {
-      const user = await ensureCloudAuth(false, this.userProfile.username);
+      const user = this.isExplicitlyLoggedOut
+        ? null
+        : await ensureCloudAuth(false, this.userProfile.username);
       this.attachCloudListeners();
       if (!user || !initialAuthHandled) {
         await this.globalSyncNow({ force: false, reconcileLocal: !!user });
@@ -476,7 +529,7 @@ class FambaiOfflineStore {
 
     const sqlPriv = sqliteDb.getAll<{ device_id: string; phone?: string; ownerUid?: string; updatedAt?: number }>('private_profile');
     const myPriv = sqlPriv.find((p) => p.device_id === this.deviceId);
-    if (myPriv?.phone && !this.userProfile.phone) {
+    if (!this.isExplicitlyLoggedOut && myPriv?.phone && !this.userProfile.phone) {
       this.userProfile.phone = myPriv.phone;
       safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
     }
@@ -651,6 +704,7 @@ class FambaiOfflineStore {
   }
 
   private ensureLocalUserInDirectory(): void {
+    if (this.isExplicitlyLoggedOut || !this.userProfile.username) return;
     const publicProfile = this.stripPhoneForPublic(this.userProfile);
     const idx = this.commutersDirectory.findIndex((c) => c.device_id === this.deviceId);
     if (idx >= 0) {
@@ -689,13 +743,15 @@ class FambaiOfflineStore {
   }
 
   // --- CLOUD MERGE HELPERS ---
-  private mergeCommuters(cloudList: UserProfile[]): void {
+  private mergeCommuters(cloudList: UserProfile[], authoritative = false): void {
     const map = new Map<string, UserProfile>();
-    this.commutersDirectory.forEach((c) => map.set(c.device_id, this.stripPhoneForPublic(c)));
+    if (!authoritative) {
+      this.commutersDirectory.forEach((c) => map.set(c.device_id, this.stripPhoneForPublic(c)));
+    }
     cloudList.forEach((c) => {
       const existing = map.get(c.device_id);
       const cleanC = this.stripPhoneForPublic(c);
-      if (c.device_id === this.deviceId) {
+      if (c.device_id === this.deviceId && !this.isExplicitlyLoggedOut) {
         const localUpdated = this.userProfile.updatedAt || 0;
         const cloudUpdated = c.updatedAt || 0;
         if (cloudUpdated > localUpdated) {
@@ -713,6 +769,9 @@ class FambaiOfflineStore {
         map.set(c.device_id, existing ? { ...existing, ...cleanC } : cleanC);
       }
     });
+    if (authoritative && !this.isExplicitlyLoggedOut && this.userProfile.username && !map.has(this.deviceId)) {
+      map.set(this.deviceId, this.stripPhoneForPublic(this.userProfile));
+    }
     this.commutersDirectory = Array.from(map.values()).sort(
       (a, b) => (b.reputation_score || 0) - (a.reputation_score || 0)
     );
@@ -929,12 +988,12 @@ class FambaiOfflineStore {
   }
 
   private applyCloudSnapshot(data: CloudSnapshotData): void {
-    if (data.privatePhone && !this.userProfile.phone) {
+    if (!this.isExplicitlyLoggedOut && data.privatePhone && !this.userProfile.phone) {
       this.userProfile.phone = data.privatePhone;
       safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
     }
     const authFlags = data.authoritative;
-    this.mergeCommuters(data.commuters);
+    this.mergeCommuters(data.commuters, authFlags?.commuters);
     this.mergeRoutes(data.routes, authFlags?.routes);
     this.mergeFareReports(data.fareReports, authFlags?.fareReports);
     this.mergeStatusReports(data.statusReports, authFlags?.statusReports);
@@ -943,7 +1002,9 @@ class FambaiOfflineStore {
     this.mergeSocialInteractions(data.socialInteractions, authFlags?.socialInteractions);
     this.mergeSocialReplies(data.socialReplies, authFlags?.socialReplies);
     this.mergeSocialReactions(data.socialReactions, authFlags?.socialReactions);
-    this.mergeNotifications(data.notifications);
+    if (!this.isExplicitlyLoggedOut) {
+      this.mergeNotifications(data.notifications);
+    }
     this.mergeBoardingConfirmations(data.boardingConfirmations, authFlags?.boardingConfirmations);
     this.mergeLocationAnchors(data.locationAnchors);
     this.cloudConnected = true;
@@ -965,7 +1026,7 @@ class FambaiOfflineStore {
         if (!this.isEffectivelyOnline()) return;
         switch (key) {
           case 'commuters':
-            this.mergeCommuters(items as UserProfile[]);
+            this.mergeCommuters(items as UserProfile[], true);
             break;
           case 'routes':
             this.mergeRoutes(items as RouteItem[], true);
@@ -1031,12 +1092,17 @@ class FambaiOfflineStore {
 
   // --- OWNERSHIP CHECK ---
   public isOwnerOf(ownerUid?: string, itemDeviceId?: string): boolean {
+    if (this.isExplicitlyLoggedOut) return false;
     const uid = this.currentAuthUid || auth.currentUser?.uid;
     if (ownerUid && uid && ownerUid === uid) return true;
     if (itemDeviceId && itemDeviceId === this.deviceId) {
       if (!ownerUid || !uid || ownerUid === this.userProfile.ownerUid) return true;
     }
     return false;
+  }
+
+  public isLoggedOut(): boolean {
+    return this.isExplicitlyLoggedOut && !this.currentAuthUid && !auth.currentUser?.uid;
   }
 
   // --- REACTION AGGREGATION HELPERS ---
@@ -1258,6 +1324,12 @@ class FambaiOfflineStore {
   }
 
   public updateUserProfile(updates: Partial<UserProfile>): UserProfile {
+    this.isExplicitlyLoggedOut = false;
+    try {
+      localStorage.removeItem(STORAGE_KEYS.EXPLICIT_LOGOUT);
+    } catch {
+      // Ignore storage error
+    }
     let handle = updates.handle || this.userProfile.handle;
     if (updates.username && !updates.handle) {
       handle = '@' + updates.username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
@@ -1268,6 +1340,11 @@ class FambaiOfflineStore {
     this.userProfile = {
       ...this.userProfile,
       ...updates,
+      device_id: this.deviceId,
+      userId: this.userProfile.userId || this.userProfile.ownerUid || `usr-${this.deviceId}`,
+      commuterBadge: updates.commuterBadge || this.userProfile.commuterBadge || 'Daily Commuter',
+      avatarColor: updates.avatarColor || this.userProfile.avatarColor || '#F27D26',
+      createdAt: this.userProfile.createdAt || Date.now(),
       handle,
       updatedAt: Date.now(),
     };
@@ -1295,6 +1372,13 @@ class FambaiOfflineStore {
     error?: string;
     operationNotAllowed?: boolean;
   }> {
+    this.isExplicitlyLoggedOut = false;
+    try {
+      localStorage.removeItem(STORAGE_KEYS.EXPLICIT_LOGOUT);
+    } catch {
+      // Ignore storage error
+    }
+
     const currentName = this.userProfile.username;
     const guestName = regenerate
       ? generateGuestUsername()
@@ -1313,8 +1397,14 @@ class FambaiOfflineStore {
 
     this.userProfile = {
       ...this.userProfile,
+      device_id: this.deviceId,
+      userId: this.userProfile.ownerUid || this.userProfile.userId || `usr-${this.deviceId}`,
       username: targetUsername,
       handle: targetHandle,
+      commuterBadge: this.userProfile.commuterBadge || 'Daily Commuter',
+      avatarColor: this.userProfile.avatarColor || '#F27D26',
+      reputation_score: this.userProfile.reputation_score || 100,
+      createdAt: this.userProfile.createdAt || Date.now(),
       isGuest: auth.currentUser ? auth.currentUser.isAnonymous : true,
       authProvider: auth.currentUser && !auth.currentUser.isAnonymous ? 'google' : 'anonymous',
       updatedAt: Date.now(),
@@ -1351,6 +1441,94 @@ class FambaiOfflineStore {
       error: res.error,
       operationNotAllowed: res.operationNotAllowed,
     };
+  }
+
+  public async logoutAndClearPersonalData(): Promise<void> {
+    const oldUid = auth.currentUser?.uid || this.currentAuthUid || this.userProfile.ownerUid;
+    const oldDeviceId = this.deviceId;
+
+    // 1. Delete personal cloud profile, private phone PII & anchor while keeping all global contributions intact
+    try {
+      await deletePersonalCloudProfile(oldDeviceId);
+    } catch {
+      // Proceed with local cleanup even if offline
+    }
+
+    // 2. Sign out of Firebase Auth (works for both Google & Anonymous accounts)
+    await signOutCloud();
+
+    // 3. Mark explicit logout so auto-auth doesn't immediately sign back in behind the user's back
+    this.isExplicitlyLoggedOut = true;
+    safeSet(STORAGE_KEYS.EXPLICIT_LOGOUT, true);
+    this.currentAuthUid = null;
+
+    // 4. Remove all personal profile storage, notifications, private location & device identity association
+    try {
+      localStorage.removeItem(STORAGE_KEYS.USER_PROFILE);
+      localStorage.removeItem(STORAGE_KEYS.USER_LOCATION);
+      localStorage.removeItem(STORAGE_KEYS.NOTIFICATIONS);
+      localStorage.removeItem(STORAGE_KEYS.OUTBOX_PENDING);
+      localStorage.removeItem(STORAGE_KEYS.LAST_REPORTS_BY_ROUTE);
+      localStorage.removeItem(STORAGE_KEYS.DEVICE_ID);
+    } catch {
+      // Ignore storage error
+    }
+    clearSavedGuestUsername();
+
+    // Rotate device ID so prior device submissions no longer appear in My Submissions
+    this.deviceId = getOrCreateDeviceId();
+
+    this.notifications = [];
+    this.outbox = [];
+    this.userLocation = DEFAULT_USER_LOCATION;
+
+    // Remove the logged-out user's personal entry from local commuters directory & location anchors
+    this.commutersDirectory = this.commutersDirectory.filter(
+      (c) => c.device_id !== oldDeviceId && (!oldUid || c.ownerUid !== oldUid)
+    );
+    safeSet(STORAGE_KEYS.COMMUTERS_DIRECTORY, this.commutersDirectory);
+
+    this.locationAnchors = this.locationAnchors.filter(
+      (a) => a.deviceId !== oldDeviceId && (!oldUid || a.ownerUid !== oldUid)
+    );
+    safeSet(STORAGE_KEYS.LOCATION_ANCHORS, this.locationAnchors);
+
+    // Clear personal tables in SQLite while keeping global contributions/interactions tables intact
+    if (sqliteDb.isReady()) {
+      sqliteDb.clearTable('private_profile');
+      sqliteDb.clearTable('notifications');
+      sqliteDb.clearTable('outbox_pending');
+      sqliteDb.replaceTable('commuters', this.commutersDirectory);
+      sqliteDb.replaceTable('location_anchors', this.locationAnchors);
+    }
+
+    // Reset in-memory personal profile to empty logged-out state
+    this.userProfile = {
+      device_id: this.deviceId,
+      userId: '',
+      username: '',
+      handle: '',
+      name: undefined,
+      phone: undefined,
+      ownerUid: undefined,
+      avatarColor: '#141414',
+      commuterBadge: '',
+      role: 'commuter',
+      isGuest: false,
+      authProvider: undefined,
+      reputation_score: 0,
+      reports_count: 0,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+
+    // Re-attach public global read listeners so global view stays live
+    this.detachCloudListeners();
+    if (this.isEffectivelyOnline()) {
+      this.attachCloudListeners();
+    }
+
+    this.notifyChange();
   }
 
   public updatePhone(phone: string): void {
@@ -1623,6 +1801,7 @@ class FambaiOfflineStore {
   }
 
   public getMyBoardingConfirmations(): BoardingConfirmation[] {
+    if (this.isExplicitlyLoggedOut) return [];
     return this.boardingConfirmations
       .filter((b) => b.deviceId === this.deviceId)
       .sort((a, b) => b.createdAt - a.createdAt);
@@ -2928,7 +3107,9 @@ class FambaiOfflineStore {
     this.globalSyncPromise = (async () => {
       let pushed = 0;
       try {
-        await ensureCloudAuth(force, this.userProfile.username);
+        if (!this.isExplicitlyLoggedOut) {
+          await ensureCloudAuth(force, this.userProfile.username);
+        }
         pushed += await this.flushOutbox(force);
 
         this.isSyncing = true;
@@ -2976,6 +3157,9 @@ class FambaiOfflineStore {
   }
 
   public getMyReports(): { fares: FareReport[]; statuses: StatusReport[] } {
+    if (this.isExplicitlyLoggedOut) {
+      return { fares: [], statuses: [] };
+    }
     const myFares = this.fareReports
       .filter((f) => this.isOwnerOf(f.ownerUid, f.reporter_device_id))
       .map((f) => this.hydrateFareVote(f));

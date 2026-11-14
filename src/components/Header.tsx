@@ -20,7 +20,7 @@ import { useOfflineStore } from '../hooks/useOfflineStore';
 import { UserProfileModal } from './UserProfileModal';
 import { PWAInstallButton } from './PWAInstallButton';
 import { THREE_CURRENCIES, formatTimeAgo } from '../utils/formatters';
-import { signInWithGoogle, signOutCloud } from '../services/firebase';
+import { signInWithGoogle } from '../services/firebase';
 
 export type NavTab = 'routes' | 'intercity' | 'transporters' | 'buzz' | 'ranks' | 'my-reports';
 
@@ -82,6 +82,14 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
     setTimeout(() => setSyncNotice(null), 5000);
   };
 
+  const handleLogout = async () => {
+    await store.logoutAndClearPersonalData();
+    setSyncNotice('Signed out. Personal profile & My Submissions cleared; global view remains active.');
+    setTimeout(() => setSyncNotice(null), 5000);
+  };
+
+  const isLoggedOut = store.isLoggedOut() && !authStatus.uid;
+
   return (
     <header className="sticky top-0 z-40 bg-[#F5F5F0] text-[#141414] border-b-2 border-[#141414]">
       {/* Top Brand & Status Bar */}
@@ -101,13 +109,19 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
               </span>
             </div>
             <p className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-[#141414]/70 flex items-center gap-1 flex-wrap">
-              <span>{profile.username}</span>
-              {(!authStatus.uid || authStatus.isAnonymous) && (
-                <span className="bg-[#F27D26]/20 text-[#141414] border border-[#141414]/40 px-1 text-[9px] font-black">
-                  GUEST
-                </span>
+              {isLoggedOut ? (
+                <span>Signed Out • Global View</span>
+              ) : (
+                <>
+                  <span>{profile.username || 'Guest'}</span>
+                  {(!authStatus.uid || authStatus.isAnonymous) && (
+                    <span className="bg-[#F27D26]/20 text-[#141414] border border-[#141414]/40 px-1 text-[9px] font-black">
+                      GUEST
+                    </span>
+                  )}
+                  <span>• UID {userId.slice(-6).toUpperCase()} • DEV {deviceId.slice(-5).toUpperCase()}</span>
+                </>
               )}
-              <span>• UID {userId.slice(-6).toUpperCase()} • DEV {deviceId.slice(-5).toUpperCase()}</span>
             </p>
           </div>
         </div>
@@ -178,11 +192,13 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
           >
             <div 
               className="w-4 h-4 text-[9px] font-black text-white flex items-center justify-center border border-[#141414]"
-              style={{ backgroundColor: profile.avatarColor || '#F27D26' }}
+              style={{ backgroundColor: isLoggedOut ? '#141414' : profile.avatarColor || '#F27D26' }}
             >
-              {profile.username ? profile.username.charAt(0).toUpperCase() : 'U'}
+              {isLoggedOut ? '?' : profile.username ? profile.username.charAt(0).toUpperCase() : 'U'}
             </div>
-            <span className="hidden md:inline max-w-[90px] truncate">{profile.name || profile.username || '@commuter'}</span>
+            <span className="hidden md:inline max-w-[90px] truncate">
+              {isLoggedOut ? 'Sign In' : profile.name || profile.username || '@commuter'}
+            </span>
           </button>
 
           {/* Offline / Online Status Pill with interactive toggle */}
@@ -233,14 +249,20 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-black uppercase flex items-center gap-1">
                       <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
-                      {authStatus.uid
+                      {isLoggedOut
+                        ? 'Signed Out'
+                        : authStatus.uid
                         ? authStatus.isAnonymous
                           ? `Guest RLS (${profile.username})`
                           : 'Google RLS ID'
                         : `Guest ID (${profile.username})`}
                     </span>
                     <span className="font-mono text-[10px] font-black text-[#141414]">
-                      {authStatus.uid ? `${authStatus.uid.slice(0, 10)}...` : 'Offline / Pending'}
+                      {isLoggedOut
+                        ? 'Cleared'
+                        : authStatus.uid
+                        ? `${authStatus.uid.slice(0, 10)}...`
+                        : 'Offline / Pending'}
                     </span>
                   </div>
                   {!authStatus.uid || authStatus.isAnonymous ? (
@@ -248,21 +270,23 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                       <div className="flex gap-1.5">
                         <button
                           type="button"
-                          onClick={() => handleContinueAsGuest(false)}
+                          onClick={() => handleContinueAsGuest(isLoggedOut)}
                           className="flex-1 py-1.5 px-2 bg-[#F27D26] hover:bg-[#d96615] text-white border border-[#141414] font-black uppercase text-[10px] flex items-center justify-center gap-1 cursor-pointer transition"
                         >
                           <UserCheck className="w-3 h-3" />
                           <span>{authStatus.uid ? 'Sync Guest Cloud' : 'Use Guest Account'}</span>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => handleContinueAsGuest(true)}
-                          className="py-1.5 px-2 bg-white hover:bg-[#141414] hover:text-white text-[#141414] border border-[#141414] font-black uppercase text-[10px] flex items-center justify-center gap-1 cursor-pointer transition"
-                          title="Generate a fresh random guest username (e.g. guest_FxD12)"
-                        >
-                          <Shuffle className="w-3 h-3 text-[#F27D26]" />
-                          <span>New ID</span>
-                        </button>
+                        {!isLoggedOut && (
+                          <button
+                            type="button"
+                            onClick={() => handleContinueAsGuest(true)}
+                            className="py-1.5 px-2 bg-white hover:bg-[#141414] hover:text-white text-[#141414] border border-[#141414] font-black uppercase text-[10px] flex items-center justify-center gap-1 cursor-pointer transition"
+                            title="Generate a fresh random guest username (e.g. guest_FxD12)"
+                          >
+                            <Shuffle className="w-3 h-3 text-[#F27D26]" />
+                            <span>New ID</span>
+                          </button>
+                        )}
                       </div>
                       <button
                         type="button"
@@ -272,6 +296,16 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                         <LogIn className="w-3 h-3 text-[#F27D26]" />
                         <span>{authStatus.uid ? 'Upgrade to Google Account' : 'Sign In with Google'}</span>
                       </button>
+                      {!isLoggedOut && (
+                        <button
+                          type="button"
+                          onClick={handleLogout}
+                          className="w-full py-1.5 px-2 bg-red-50 hover:bg-red-600 hover:text-white text-red-700 border border-[#141414] font-black uppercase text-[10px] flex items-center justify-center gap-1.5 cursor-pointer transition"
+                        >
+                          <LogOut className="w-3 h-3" />
+                          <span>Sign Out &amp; Clear Personal Info</span>
+                        </button>
+                      )}
                       {syncStatus.anonAuthBlocked && (
                         <p className="text-[10px] font-bold text-amber-900 bg-amber-50 border border-amber-400 p-1.5 leading-snug">
                           Guest cloud login needs <strong>Anonymous</strong> enabled in Firebase Console → Authentication → Sign-in method, or use Google Sign-In.
@@ -283,10 +317,10 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                       <span className="font-bold text-emerald-800 truncate">{authStatus.email || authStatus.displayName}</span>
                       <button
                         type="button"
-                        onClick={() => signOutCloud()}
+                        onClick={handleLogout}
                         className="text-rose-700 font-black uppercase flex items-center gap-0.5 cursor-pointer"
                       >
-                        <LogOut className="w-3 h-3" /> Out
+                        <LogOut className="w-3 h-3" /> Sign Out
                       </button>
                     </div>
                   )}

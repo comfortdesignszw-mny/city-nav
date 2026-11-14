@@ -53,6 +53,14 @@ export function saveGuestUsername(guestName: string): void {
   }
 }
 
+export function clearSavedGuestUsername(): void {
+  try {
+    localStorage.removeItem(GUEST_USERNAME_STORAGE_KEY);
+  } catch {
+    // Ignore storage error
+  }
+}
+
 export async function syncFirebaseDisplayName(displayName: string): Promise<void> {
   if (!auth.currentUser || !displayName.trim()) return;
   try {

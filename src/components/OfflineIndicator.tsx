@@ -83,7 +83,9 @@ export const OfflineIndicator: React.FC = () => {
                   </span>
                   <span className="text-stone-300 text-[10px] font-bold block truncate uppercase">
                     {needsAuthSession
-                      ? `Sync as ${profile.username} (Guest) or Google`
+                      ? profile.username
+                        ? `Sync as ${profile.username} (Guest) or Google`
+                        : 'Sync as Guest or Google'
                       : 'SQLite → Cloud Firestore'}
                   </span>
                 </div>
@@ -108,7 +110,13 @@ export const OfflineIndicator: React.FC = () => {
                   className="px-2.5 py-1.5 bg-[#F27D26] hover:bg-white hover:text-[#141414] text-[10px] font-black uppercase tracking-wider text-white border-2 border-white transition cursor-pointer flex items-center gap-1 disabled:opacity-60"
                 >
                   <UserCheck className="w-3 h-3" />
-                  <span>{authLoading === 'guest' ? 'Syncing...' : `Guest (${profile.username})`}</span>
+                  <span>
+                    {authLoading === 'guest'
+                      ? 'Syncing...'
+                      : profile.username
+                      ? `Guest (${profile.username})`
+                      : 'Guest Sync'}
+                  </span>
                 </button>
                 <button
                   onClick={handleGoogleSignIn}
