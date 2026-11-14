@@ -425,4 +425,5 @@ export interface SyncStatusInfo {
   sqliteRowCount: number;
   authReady?: boolean;
   authUid?: string | null;
+  anonAuthBlocked?: boolean;
 }

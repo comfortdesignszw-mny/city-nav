@@ -1,6 +1,7 @@
-import React from 'react';
-import { CloudUpload, RefreshCw } from 'lucide-react';
+import React, { useState } from 'react';
+import { CloudUpload, LogIn, RefreshCw } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
+import { signInWithGoogle } from '../services/firebase';
 
 export const OfflineIndicator: React.FC = () => {
   const store = useOfflineStore();
@@ -8,8 +9,23 @@ export const OfflineIndicator: React.FC = () => {
   const isSimulated = store.isOfflineSimulated();
   const pendingCount = store.getPendingWritesCount();
   const syncStatus = store.getSyncStatus();
+  const [signingIn, setSigningIn] = useState(false);
 
   if (isOnline && pendingCount === 0 && !syncStatus.isSyncing) return null;
+
+  const needsSignIn = isOnline && pendingCount > 0 && !syncStatus.authUid && !!syncStatus.anonAuthBlocked;
+
+  const handleSignInAndSync = async () => {
+    setSigningIn(true);
+    try {
+      const res = await signInWithGoogle();
+      if (res.user) {
+        await store.globalSyncNow({ force: true, reconcileLocal: true });
+      }
+    } finally {
+      setSigningIn(false);
+    }
+  };
 
   return (
     <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:max-w-md z-40 animate-in slide-in-from-bottom duration-300">
@@ -40,10 +56,14 @@ export const OfflineIndicator: React.FC = () => {
                 <span className="font-black uppercase tracking-wider text-xs">
                   {syncStatus.isSyncing
                     ? 'Syncing with Cloud...'
+                    : needsSignIn
+                    ? `${pendingCount} Local Item${pendingCount > 1 ? 's' : ''} Waiting`
                     : `${pendingCount} Outbox Report${pendingCount > 1 ? 's' : ''}`}
                 </span>
-                <span className="text-stone-300 text-[10px] font-bold block uppercase">
-                  SQLite → Cloud Firestore
+                <span className="text-stone-300 text-[10px] font-bold block truncate uppercase">
+                  {needsSignIn
+                    ? 'Sign in with Google to push to global cloud'
+                    : 'SQLite → Cloud Firestore'}
                 </span>
               </div>
             </>
@@ -59,9 +79,19 @@ export const OfflineIndicator: React.FC = () => {
               Go Online
             </button>
           )}
-          {isOnline && (
+          {isOnline && needsSignIn && (
             <button
-              onClick={() => store.globalSyncNow()}
+              onClick={handleSignInAndSync}
+              disabled={signingIn}
+              className="px-3 py-1.5 bg-[#F27D26] hover:bg-white hover:text-[#141414] text-[10px] font-black uppercase tracking-wider text-white border-2 border-white transition cursor-pointer flex items-center gap-1 disabled:opacity-60"
+            >
+              <LogIn className="w-3 h-3" />
+              <span>{signingIn ? 'Signing In...' : 'Sign In & Sync'}</span>
+            </button>
+          )}
+          {isOnline && !needsSignIn && (
+            <button
+              onClick={() => store.globalSyncNow({ force: true, reconcileLocal: true })}
               disabled={syncStatus.isSyncing}
               className="px-3 py-1.5 bg-white hover:bg-[#F27D26] hover:text-white text-[10px] font-black uppercase tracking-wider text-[#141414] border-2 border-[#141414] transition cursor-pointer disabled:opacity-60"
             >

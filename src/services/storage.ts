@@ -148,6 +148,12 @@ class FambaiOfflineStore {
   private currentAuthUid: string | null = null;
   private listeners: Set<() => void> = new Set();
   private syncTimer: ReturnType<typeof setInterval> | null = null;
+  private fastRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private fastRetryAttempt: number = 0;
+  private flushPromise: Promise<number> | null = null;
+  private flushRequestedAgain: boolean = false;
+  private globalSyncPromise: Promise<{ pushed: number; pulled: boolean; error?: string }> | null = null;
+  private lastVisibilitySyncAt: number = 0;
   private cloudUnsubscribe: (() => void) | null = null;
   private activeSubscribedUid: string | null = null;
 
@@ -215,25 +221,149 @@ class FambaiOfflineStore {
     // 3. Initialize Local SQLite + Firebase Auth + Bidirectional Cloud Sync
     this.initSqliteAndCloud();
 
-    // 4. Listen to browser online/offline events
+    // 4. Listen to browser online/offline, visibility, focus & pageshow events for immediate sync
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => {
+        this.fastRetryAttempt = 0;
         this.notifyChange();
         this.onNetworkReconnected();
       });
       window.addEventListener('offline', () => {
+        if (this.fastRetryTimer) {
+          clearTimeout(this.fastRetryTimer);
+          this.fastRetryTimer = null;
+        }
         this.cloudConnected = false;
         this.detachCloudListeners();
         this.notifyChange();
       });
+      window.addEventListener('focus', () => {
+        this.triggerResumeSync();
+      });
+      window.addEventListener('pageshow', () => {
+        this.triggerResumeSync();
+      });
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') {
+            this.triggerResumeSync();
+          }
+        });
+      }
+    }
+  }
+
+  private triggerResumeSync(): void {
+    if (!this.isEffectivelyOnline()) return;
+    const now = Date.now();
+    if (this.getPendingWritesCount() > 0) {
+      this.globalSyncNow({ force: false, reconcileLocal: true });
+      this.lastVisibilitySyncAt = now;
+      return;
+    }
+    if (now - this.lastVisibilitySyncAt > 10000) {
+      this.lastVisibilitySyncAt = now;
+      this.attachCloudListeners();
+      this.globalSyncNow({ force: false, reconcileLocal: false });
     }
   }
 
   private async onNetworkReconnected(): Promise<void> {
     if (!this.isEffectivelyOnline()) return;
-    await ensureCloudAuth();
+    if (this.fastRetryTimer) {
+      clearTimeout(this.fastRetryTimer);
+      this.fastRetryTimer = null;
+    }
+    await ensureCloudAuth(true);
     this.attachCloudListeners();
-    await this.globalSyncNow();
+    await this.globalSyncNow({ force: true, reconcileLocal: true });
+  }
+
+  private backfillLocalOwnerUid(uid: string): void {
+    let updatedAny = false;
+    this.fareReports.forEach((f) => {
+      if (f.reporter_device_id === this.deviceId && !f.ownerUid) {
+        f.ownerUid = uid;
+        updatedAny = true;
+      }
+    });
+    if (updatedAny) safeSet(STORAGE_KEYS.FARE_REPORTS, this.fareReports);
+
+    let statusChanged = false;
+    this.statusReports.forEach((s) => {
+      if (s.reporter_device_id === this.deviceId && !s.ownerUid) {
+        s.ownerUid = uid;
+        statusChanged = true;
+      }
+    });
+    if (statusChanged) safeSet(STORAGE_KEYS.STATUS_REPORTS, this.statusReports);
+
+    let icChanged = false;
+    this.intercityReports.forEach((r) => {
+      if (r.reporterDeviceId === this.deviceId && !r.ownerUid) {
+        r.ownerUid = uid;
+        icChanged = true;
+      }
+    });
+    if (icChanged) safeSet(STORAGE_KEYS.INTERCITY_REPORTS, this.intercityReports);
+
+    let transChanged = false;
+    this.transporters.forEach((t) => {
+      if (t.registeredByDeviceId === this.deviceId && !t.ownerUid) {
+        t.ownerUid = uid;
+        transChanged = true;
+      }
+    });
+    if (transChanged) safeSet(STORAGE_KEYS.TRANSPORTERS, this.transporters);
+
+    let socChanged = false;
+    this.socialInteractions.forEach((s) => {
+      if (s.deviceId === this.deviceId && !s.ownerUid) {
+        s.ownerUid = uid;
+        socChanged = true;
+      }
+    });
+    if (socChanged) safeSet(STORAGE_KEYS.SOCIAL_INTERACTIONS, this.socialInteractions);
+
+    let repChanged = false;
+    this.socialReplies.forEach((r) => {
+      if (r.deviceId === this.deviceId && !r.ownerUid) {
+        r.ownerUid = uid;
+        repChanged = true;
+      }
+    });
+    if (repChanged) safeSet(STORAGE_KEYS.SOCIAL_REPLIES, this.socialReplies);
+
+    let reactChanged = false;
+    this.socialReactions.forEach((r) => {
+      if (r.deviceId === this.deviceId && !r.ownerUid) {
+        r.ownerUid = uid;
+        reactChanged = true;
+      }
+    });
+    if (reactChanged) safeSet(STORAGE_KEYS.SOCIAL_REACTIONS, this.socialReactions);
+
+    let brdChanged = false;
+    this.boardingConfirmations.forEach((b) => {
+      if (b.deviceId === this.deviceId && !b.ownerUid) {
+        b.ownerUid = uid;
+        brdChanged = true;
+      }
+    });
+    if (brdChanged) safeSet(STORAGE_KEYS.BOARDING_CONFIRMATIONS, this.boardingConfirmations);
+
+    if (
+      updatedAny ||
+      statusChanged ||
+      icChanged ||
+      transChanged ||
+      socChanged ||
+      repChanged ||
+      reactChanged ||
+      brdChanged
+    ) {
+      this.mirrorAllToSqlite();
+    }
   }
 
   private async initSqliteAndCloud(): Promise<void> {
@@ -248,11 +378,20 @@ class FambaiOfflineStore {
     this.notifyChange();
     this.startBackgroundSync();
 
+    // Attach real-time global cloud listeners immediately when online
+    if (this.isEffectivelyOnline()) {
+      this.attachCloudListeners();
+    }
+
+    let initialAuthHandled = false;
+
     // Subscribe to Firebase Auth changes for auto-assigned cloud UID & dual-sync
     subscribeAuthState(async (user) => {
       const uid = user?.uid || null;
       this.currentAuthUid = uid;
       if (uid) {
+        initialAuthHandled = true;
+        this.backfillLocalOwnerUid(uid);
         let changed = false;
         if (this.userProfile.ownerUid !== uid || !this.userProfile.userId || this.userProfile.userId.startsWith('usr-zw-')) {
           this.userProfile = {
@@ -274,17 +413,18 @@ class FambaiOfflineStore {
             this.detachCloudListeners();
           }
           this.attachCloudListeners();
-          await this.globalSyncNow();
+          await this.globalSyncNow({ force: false, reconcileLocal: true });
         }
       }
       this.notifyChange();
     });
 
     if (this.isEffectivelyOnline()) {
-      await ensureCloudAuth();
+      const user = await ensureCloudAuth(false);
       this.attachCloudListeners();
-      this.syncProfileToOutbox(false);
-      await this.globalSyncNow();
+      if (!user || !initialAuthHandled) {
+        await this.globalSyncNow({ force: false, reconcileLocal: !!user });
+      }
     }
   }
 
@@ -491,6 +631,20 @@ class FambaiOfflineStore {
     return ids;
   }
 
+  private getPendingCreateIds(createType: PendingWrite['type'], extraAddRouteKey?: 'route' | 'fare' | 'status'): Set<string> {
+    const ids = new Set<string>();
+    for (const w of this.outbox) {
+      if (w.status === 'synced') continue;
+      if (w.type === createType && w.payload?.id) {
+        ids.add(w.payload.id);
+      }
+      if (w.type === 'add_route' && extraAddRouteKey && w.payload?.[extraAddRouteKey]?.id) {
+        ids.add(w.payload[extraAddRouteKey].id);
+      }
+    }
+    return ids;
+  }
+
   // --- CLOUD MERGE HELPERS ---
   private mergeCommuters(cloudList: UserProfile[]): void {
     const map = new Map<string, UserProfile>();
@@ -523,9 +677,15 @@ class FambaiOfflineStore {
     if (sqliteDb.isReady()) sqliteDb.replaceTable('commuters', this.commutersDirectory);
   }
 
-  private mergeRoutes(cloudList: RouteItem[]): void {
+  private mergeRoutes(cloudList: RouteItem[], authoritative = false): void {
+    const seedIds = new Set(SEED_ROUTES.map((r) => r.id));
+    const pendingRouteIds = this.getPendingCreateIds('add_route', 'route');
     const map = new Map<string, RouteItem>();
-    this.routes.forEach((r) => map.set(r.id, r));
+    this.routes.forEach((r) => {
+      if (!authoritative || seedIds.has(r.id) || pendingRouteIds.has(r.id)) {
+        map.set(r.id, r);
+      }
+    });
     cloudList.forEach((r) => {
       const existing = map.get(r.id);
       map.set(r.id, existing ? { ...existing, ...r } : r);
@@ -535,11 +695,14 @@ class FambaiOfflineStore {
     if (sqliteDb.isReady()) sqliteDb.replaceTable('routes', this.routes);
   }
 
-  private mergeFareReports(cloudList: FareReport[]): void {
+  private mergeFareReports(cloudList: FareReport[], authoritative = false): void {
     const deletedIds = this.getPendingDeletedIds('fare_delete');
+    const pendingIds = this.getPendingCreateIds('fare_report', 'fare');
     const map = new Map<string, FareReport>();
     this.fareReports.forEach((f) => {
-      if (!deletedIds.has(f.id)) map.set(f.id, f);
+      if (!deletedIds.has(f.id) && (!authoritative || pendingIds.has(f.id))) {
+        map.set(f.id, f);
+      }
     });
     cloudList.forEach((f) => {
       if (deletedIds.has(f.id)) return;
@@ -551,11 +714,14 @@ class FambaiOfflineStore {
     if (sqliteDb.isReady()) sqliteDb.replaceTable('fare_reports', this.fareReports);
   }
 
-  private mergeStatusReports(cloudList: StatusReport[]): void {
+  private mergeStatusReports(cloudList: StatusReport[], authoritative = false): void {
     const deletedIds = this.getPendingDeletedIds('status_delete');
+    const pendingIds = this.getPendingCreateIds('status_report', 'status');
     const map = new Map<string, StatusReport>();
     this.statusReports.forEach((s) => {
-      if (!deletedIds.has(s.id)) map.set(s.id, s);
+      if (!deletedIds.has(s.id) && (!authoritative || pendingIds.has(s.id))) {
+        map.set(s.id, s);
+      }
     });
     cloudList.forEach((s) => {
       if (!deletedIds.has(s.id)) map.set(s.id, s);
@@ -565,11 +731,14 @@ class FambaiOfflineStore {
     if (sqliteDb.isReady()) sqliteDb.replaceTable('status_reports', this.statusReports);
   }
 
-  private mergeIntercityReports(cloudList: IntercityReport[]): void {
+  private mergeIntercityReports(cloudList: IntercityReport[], authoritative = false): void {
     const deletedIds = this.getPendingDeletedIds('intercity_delete');
+    const pendingIds = this.getPendingCreateIds('intercity_report');
     const map = new Map<string, IntercityReport>();
     this.intercityReports.forEach((r) => {
-      if (!deletedIds.has(r.id)) map.set(r.id, r);
+      if (!deletedIds.has(r.id) && (!authoritative || pendingIds.has(r.id))) {
+        map.set(r.id, r);
+      }
     });
     cloudList.forEach((r) => {
       if (deletedIds.has(r.id)) return;
@@ -581,11 +750,15 @@ class FambaiOfflineStore {
     if (sqliteDb.isReady()) sqliteDb.replaceTable('intercity_reports', this.intercityReports);
   }
 
-  private mergeTransporters(cloudList: TransporterProfile[]): void {
+  private mergeTransporters(cloudList: TransporterProfile[], authoritative = false): void {
     const deletedIds = this.getPendingDeletedIds('transporter_delete');
+    const pendingIds = this.getPendingCreateIds('transporter_register');
+    const pendingEditIds = this.getPendingCreateIds('transporter_update');
     const map = new Map<string, TransporterProfile>();
     this.transporters.forEach((t) => {
-      if (!deletedIds.has(t.id)) map.set(t.id, t);
+      if (!deletedIds.has(t.id) && (!authoritative || pendingIds.has(t.id) || pendingEditIds.has(t.id))) {
+        map.set(t.id, t);
+      }
     });
     cloudList.forEach((t) => {
       if (deletedIds.has(t.id)) return;
@@ -602,11 +775,15 @@ class FambaiOfflineStore {
     if (sqliteDb.isReady()) sqliteDb.replaceTable('transporters', this.transporters);
   }
 
-  private mergeSocialInteractions(cloudList: CommuterSocialInteraction[]): void {
+  private mergeSocialInteractions(cloudList: CommuterSocialInteraction[], authoritative = false): void {
     const deletedIds = this.getPendingDeletedIds('social_interaction_delete');
+    const pendingIds = this.getPendingCreateIds('social_interaction');
+    const pendingEditIds = this.getPendingCreateIds('social_interaction_edit');
     const map = new Map<string, CommuterSocialInteraction>();
     this.socialInteractions.forEach((s) => {
-      if (!deletedIds.has(s.id)) map.set(s.id, s);
+      if (!deletedIds.has(s.id) && (!authoritative || pendingIds.has(s.id) || pendingEditIds.has(s.id))) {
+        map.set(s.id, s);
+      }
     });
     cloudList.forEach((s) => {
       if (deletedIds.has(s.id)) return;
@@ -625,11 +802,15 @@ class FambaiOfflineStore {
     if (sqliteDb.isReady()) sqliteDb.replaceTable('social_interactions', this.socialInteractions);
   }
 
-  private mergeSocialReplies(cloudList: SocialReply[]): void {
+  private mergeSocialReplies(cloudList: SocialReply[], authoritative = false): void {
     const deletedIds = this.getPendingDeletedIds('social_reply_delete');
+    const pendingIds = this.getPendingCreateIds('social_reply');
+    const pendingEditIds = this.getPendingCreateIds('social_reply_edit');
     const map = new Map<string, SocialReply>();
     this.socialReplies.forEach((r) => {
-      if (!deletedIds.has(r.id)) map.set(r.id, r);
+      if (!deletedIds.has(r.id) && (!authoritative || pendingIds.has(r.id) || pendingEditIds.has(r.id))) {
+        map.set(r.id, r);
+      }
     });
     cloudList.forEach((r) => {
       if (deletedIds.has(r.id)) return;
@@ -648,11 +829,14 @@ class FambaiOfflineStore {
     if (sqliteDb.isReady()) sqliteDb.replaceTable('social_replies', this.socialReplies);
   }
 
-  private mergeSocialReactions(cloudList: SocialReactionRecord[]): void {
+  private mergeSocialReactions(cloudList: SocialReactionRecord[], authoritative = false): void {
     const deletedIds = this.getPendingDeletedIds('social_reaction_delete');
+    const pendingIds = this.getPendingCreateIds('social_reaction_record');
     const map = new Map<string, SocialReactionRecord>();
     this.socialReactions.forEach((rec) => {
-      if (!deletedIds.has(rec.id)) map.set(rec.id, rec);
+      if (!deletedIds.has(rec.id) && (!authoritative || pendingIds.has(rec.id))) {
+        map.set(rec.id, rec);
+      }
     });
     cloudList.forEach((rec) => {
       if (deletedIds.has(rec.id)) return;
@@ -678,9 +862,14 @@ class FambaiOfflineStore {
     if (sqliteDb.isReady()) sqliteDb.replaceTable('notifications', this.notifications);
   }
 
-  private mergeBoardingConfirmations(cloudList: BoardingConfirmation[]): void {
+  private mergeBoardingConfirmations(cloudList: BoardingConfirmation[], authoritative = false): void {
+    const pendingIds = this.getPendingCreateIds('boarding_confirmation');
     const map = new Map<string, BoardingConfirmation>();
-    this.boardingConfirmations.forEach((b) => map.set(b.id, b));
+    this.boardingConfirmations.forEach((b) => {
+      if (!authoritative || pendingIds.has(b.id)) {
+        map.set(b.id, b);
+      }
+    });
     cloudList.forEach((b) => map.set(b.id, b));
     this.boardingConfirmations = Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
     safeSet(STORAGE_KEYS.BOARDING_CONFIRMATIONS, this.boardingConfirmations);
@@ -701,17 +890,18 @@ class FambaiOfflineStore {
       this.userProfile.phone = data.privatePhone;
       safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
     }
+    const authFlags = data.authoritative;
     this.mergeCommuters(data.commuters);
-    this.mergeRoutes(data.routes);
-    this.mergeFareReports(data.fareReports);
-    this.mergeStatusReports(data.statusReports);
-    this.mergeIntercityReports(data.intercityReports);
-    this.mergeTransporters(data.transporters);
-    this.mergeSocialInteractions(data.socialInteractions);
-    this.mergeSocialReplies(data.socialReplies);
-    this.mergeSocialReactions(data.socialReactions);
+    this.mergeRoutes(data.routes, authFlags?.routes);
+    this.mergeFareReports(data.fareReports, authFlags?.fareReports);
+    this.mergeStatusReports(data.statusReports, authFlags?.statusReports);
+    this.mergeIntercityReports(data.intercityReports, authFlags?.intercityReports);
+    this.mergeTransporters(data.transporters, authFlags?.transporters);
+    this.mergeSocialInteractions(data.socialInteractions, authFlags?.socialInteractions);
+    this.mergeSocialReplies(data.socialReplies, authFlags?.socialReplies);
+    this.mergeSocialReactions(data.socialReactions, authFlags?.socialReactions);
     this.mergeNotifications(data.notifications);
-    this.mergeBoardingConfirmations(data.boardingConfirmations);
+    this.mergeBoardingConfirmations(data.boardingConfirmations, authFlags?.boardingConfirmations);
     this.mergeLocationAnchors(data.locationAnchors);
     this.cloudConnected = true;
     this.lastSyncedAt = Date.now();
@@ -735,34 +925,34 @@ class FambaiOfflineStore {
             this.mergeCommuters(items as UserProfile[]);
             break;
           case 'routes':
-            this.mergeRoutes(items as RouteItem[]);
+            this.mergeRoutes(items as RouteItem[], true);
             break;
           case 'fareReports':
-            this.mergeFareReports(items as FareReport[]);
+            this.mergeFareReports(items as FareReport[], true);
             break;
           case 'statusReports':
-            this.mergeStatusReports(items as StatusReport[]);
+            this.mergeStatusReports(items as StatusReport[], true);
             break;
           case 'intercityReports':
-            this.mergeIntercityReports(items as IntercityReport[]);
+            this.mergeIntercityReports(items as IntercityReport[], true);
             break;
           case 'transporters':
-            this.mergeTransporters(items as TransporterProfile[]);
+            this.mergeTransporters(items as TransporterProfile[], true);
             break;
           case 'socialInteractions':
-            this.mergeSocialInteractions(items as CommuterSocialInteraction[]);
+            this.mergeSocialInteractions(items as CommuterSocialInteraction[], true);
             break;
           case 'socialReplies':
-            this.mergeSocialReplies(items as SocialReply[]);
+            this.mergeSocialReplies(items as SocialReply[], true);
             break;
           case 'socialReactions':
-            this.mergeSocialReactions(items as SocialReactionRecord[]);
+            this.mergeSocialReactions(items as SocialReactionRecord[], true);
             break;
           case 'notifications':
             this.mergeNotifications(items as CommuterNotification[]);
             break;
           case 'boardingConfirmations':
-            this.mergeBoardingConfirmations(items as BoardingConfirmation[]);
+            this.mergeBoardingConfirmations(items as BoardingConfirmation[], true);
             break;
           case 'locationAnchors':
             this.mergeLocationAnchors(items as LocationAnchor[]);
@@ -833,7 +1023,8 @@ class FambaiOfflineStore {
   private toggleReactionRecord(
     targetType: ReactionTargetType,
     targetId: string,
-    desired: 'up' | 'down' | 'like' | 'dislike'
+    desired: 'up' | 'down' | 'like' | 'dislike',
+    autoFlush = true
   ): { added: boolean; removed: boolean } {
     const recId = `${targetType}_${targetId}_${this.deviceId}`;
     const existingIdx = this.socialReactions.findIndex((r) => r.id === recId);
@@ -845,7 +1036,7 @@ class FambaiOfflineStore {
       this.socialReactions.splice(existingIdx, 1);
       safeSet(STORAGE_KEYS.SOCIAL_REACTIONS, this.socialReactions);
       if (sqliteDb.isReady()) sqliteDb.deleteRecord('social_reactions', recId);
-      this.enqueueWrite('social_reaction_delete', { id: recId }, true);
+      this.enqueueWrite('social_reaction_delete', { id: recId }, autoFlush);
       this.notifyChange();
       return { added: false, removed: true };
     }
@@ -870,7 +1061,7 @@ class FambaiOfflineStore {
 
     safeSet(STORAGE_KEYS.SOCIAL_REACTIONS, this.socialReactions);
     if (sqliteDb.isReady()) sqliteDb.upsertRecord('social_reactions', record.id, record, now);
-    this.enqueueWrite('social_reaction_record', record, true);
+    this.enqueueWrite('social_reaction_record', record, autoFlush);
     this.notifyChange();
     return { added: true, removed: false };
   }
@@ -887,6 +1078,7 @@ class FambaiOfflineStore {
       sqliteRowCount: sqliteDb.isReady() ? sqliteDb.getTotalRowCount() : 0,
       authReady: !!authStat.uid,
       authUid: authStat.uid,
+      anonAuthBlocked: authStat.anonAuthBlocked,
     };
   }
 
@@ -934,22 +1126,75 @@ class FambaiOfflineStore {
     return [...this.commutersDirectory];
   }
 
-  private enqueueWrite(type: PendingWrite['type'], payload: any, triggerSync = true): void {
-    const pendingWrite: PendingWrite = {
-      id: `outbox-${type}-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
-      type,
-      payload,
-      created_at: Date.now(),
-      retry_count: 0,
-      status: 'pending',
+  private compactOutboxForNewWrite(type: PendingWrite['type'], payload: any): boolean {
+    // Coalesce singleton profile / anchor updates so older unsent snapshots don't pile up
+    if (type === 'profile_update' || type === 'private_profile_update' || type === 'location_anchor') {
+      this.outbox = this.outbox.filter((w) => !(w.type === type && w.status !== 'syncing'));
+    }
+
+    // If deleting an item that only ever existed offline in the outbox, cancel both create + delete
+    const deleteToCreateMap: Partial<Record<PendingWrite['type'], PendingWrite['type']>> = {
+      fare_delete: 'fare_report',
+      status_delete: 'status_report',
+      intercity_delete: 'intercity_report',
+      transporter_delete: 'transporter_register',
+      social_interaction_delete: 'social_interaction',
+      social_reply_delete: 'social_reply',
+      social_reaction_delete: 'social_reaction_record',
     };
-    this.outbox = [pendingWrite, ...this.outbox];
+    const matchingCreateType = deleteToCreateMap[type];
+    if (matchingCreateType && payload?.id) {
+      const unsentCreate = this.outbox.find(
+        (w) => w.type === matchingCreateType && w.status === 'pending' && w.payload?.id === payload.id
+      );
+      if (unsentCreate) {
+        this.outbox = this.outbox.filter(
+          (w) =>
+            !(
+              w.payload?.id === payload.id &&
+              (w.type === matchingCreateType ||
+                w.type === 'transporter_update' ||
+                w.type === 'social_interaction_edit' ||
+                w.type === 'social_reply_edit')
+            )
+        );
+        return false; // Nothing to enqueue; offline item never reached cloud
+      }
+    }
+
+    if (type === 'social_reaction_record' && payload?.id) {
+      this.outbox = this.outbox.filter(
+        (w) =>
+          !(
+            (w.type === 'social_reaction_record' || w.type === 'social_reaction_delete') &&
+            w.status !== 'syncing' &&
+            w.payload?.id === payload.id
+          )
+      );
+    }
+
+    return true;
+  }
+
+  private enqueueWrite(type: PendingWrite['type'], payload: any, triggerSync = true): void {
+    const shouldEnqueue = this.compactOutboxForNewWrite(type, payload);
+    if (shouldEnqueue) {
+      const pendingWrite: PendingWrite = {
+        id: `outbox-${type}-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+        type,
+        payload,
+        created_at: Date.now(),
+        retry_count: 0,
+        status: 'pending',
+      };
+      this.outbox = [pendingWrite, ...this.outbox];
+    }
     safeSet(STORAGE_KEYS.OUTBOX_PENDING, this.outbox);
     if (sqliteDb.isReady()) {
-      sqliteDb.upsertRecord('outbox_pending', pendingWrite.id, pendingWrite, pendingWrite.created_at);
+      sqliteDb.replaceTable('outbox_pending', this.outbox);
     }
     this.notifyChange();
-    if (triggerSync) {
+    if (triggerSync && this.isEffectivelyOnline()) {
       this.flushOutbox();
     }
   }
@@ -1425,8 +1670,8 @@ class FambaiOfflineStore {
       sqliteDb.upsertRecord('intercity_reports', newReport.id, newReport, now);
     }
 
-    // Create owner's own reaction record instead of mutating parent upvotes
-    this.toggleReactionRecord('intercity', newReport.id, 'up');
+    // Create owner's own reaction record without premature flush race
+    this.toggleReactionRecord('intercity', newReport.id, 'up', false);
 
     this.userProfile.reports_count += 1;
     this.userProfile.reputation_score += 15;
@@ -1532,7 +1777,7 @@ class FambaiOfflineStore {
       sqliteDb.upsertRecord('transporters', newTransporter.id, newTransporter, now);
     }
 
-    this.toggleReactionRecord('transporter', newTransporter.id, 'like');
+    this.toggleReactionRecord('transporter', newTransporter.id, 'like', false);
 
     this.userProfile.role = 'transporter';
     this.userProfile.commuterBadge = 'Registered Transporter';
@@ -1699,7 +1944,7 @@ class FambaiOfflineStore {
       sqliteDb.upsertRecord('social_interactions', newInteraction.id, newInteraction, now);
     }
 
-    this.toggleReactionRecord('social', newInteraction.id, 'like');
+    this.toggleReactionRecord('social', newInteraction.id, 'like', false);
 
     this.userProfile.reputation_score += data.isAbuseReport ? 20 : 10;
     this.userProfile.reports_count += 1;
@@ -2122,7 +2367,7 @@ class FambaiOfflineStore {
     safeSet(STORAGE_KEYS.FARE_REPORTS, this.fareReports);
     if (sqliteDb.isReady()) sqliteDb.upsertRecord('fare_reports', newFare.id, newFare, now);
     this.markReportTime(routeId);
-    this.toggleReactionRecord('fare', newFare.id, 'up');
+    this.toggleReactionRecord('fare', newFare.id, 'up', false);
 
     let newStatus: StatusReport | undefined;
     if (data.statusType) {
@@ -2193,7 +2438,7 @@ class FambaiOfflineStore {
     safeSet(STORAGE_KEYS.FARE_REPORTS, this.fareReports);
     if (sqliteDb.isReady()) sqliteDb.upsertRecord('fare_reports', newReport.id, newReport, now);
     this.markReportTime(routeId);
-    this.toggleReactionRecord('fare', newReport.id, 'up');
+    this.toggleReactionRecord('fare', newReport.id, 'up', false);
 
     this.userProfile.reports_count += 1;
     this.userProfile.reputation_score += 5;
@@ -2298,68 +2543,263 @@ class FambaiOfflineStore {
     this.toggleReactionRecord('fare', fareId, voteType);
   }
 
-  // --- CLOUD SYNC & OUTBOX FLUSH ---
-  public async flushOutbox(): Promise<number> {
-    if (this.isSyncing) return 0;
-    if (!this.isEffectivelyOnline()) return 0;
-
-    const pending = this.outbox.filter(
-      (w) => w.status === 'pending' || w.status === 'failed'
-    );
-    if (pending.length === 0) return 0;
-
-    this.isSyncing = true;
-    this.lastSyncError = null;
-    this.notifyChange();
-
-    let pushedCount = 0;
-    const ordered = [...pending].reverse();
-
-    for (const item of ordered) {
-      if (!this.isEffectivelyOnline()) {
-        item.status = 'failed';
-        item.retry_count += 1;
-        break;
+  private scheduleFastRetry(): void {
+    if (this.fastRetryTimer || !this.isEffectivelyOnline()) return;
+    const authStat = getCurrentAuthStatus();
+    if (!authStat.uid && authStat.anonAuthBlocked) return;
+    if (this.fastRetryAttempt >= 4) return;
+    const delays = [1200, 3000, 6000, 12000];
+    const delay = delays[Math.min(this.fastRetryAttempt, delays.length - 1)];
+    this.fastRetryAttempt += 1;
+    this.fastRetryTimer = setTimeout(() => {
+      this.fastRetryTimer = null;
+      if (this.isEffectivelyOnline() && this.getPendingWritesCount() > 0) {
+        this.flushOutbox();
       }
-
-      item.status = 'syncing';
-      try {
-        await pushPendingWriteToCloud(item);
-        item.status = 'synced';
-        pushedCount += 1;
-      } catch (err: any) {
-        const msg = err?.message || 'Cloud sync error';
-        if (msg.includes('Sign in required')) {
-          item.status = 'pending';
-          item.error = msg;
-          this.lastSyncError = msg;
-          break;
-        }
-        item.status = 'failed';
-        item.retry_count += 1;
-        item.error = msg;
-        this.lastSyncError = msg;
-      }
-    }
-
-    const activePending = this.outbox.filter((w) => w.status !== 'synced');
-    const recentSynced = this.outbox.filter((w) => w.status === 'synced').slice(0, 20);
-    this.outbox = [...activePending, ...recentSynced];
-    safeSet(STORAGE_KEYS.OUTBOX_PENDING, this.outbox);
-    if (sqliteDb.isReady()) sqliteDb.replaceTable('outbox_pending', this.outbox);
-
-    if (pushedCount > 0) {
-      this.cloudConnected = true;
-      this.lastSyncedAt = Date.now();
-      safeSet(STORAGE_KEYS.LAST_SYNCED_AT, this.lastSyncedAt);
-    }
-
-    this.isSyncing = false;
-    this.notifyChange();
-    return pushedCount;
+    }, delay);
   }
 
-  public async globalSyncNow(): Promise<{ pushed: number; pulled: boolean; error?: string }> {
+  private persistOutboxClearedSynced(): void {
+    this.outbox = this.outbox.filter((w) => w.status !== 'synced');
+    safeSet(STORAGE_KEYS.OUTBOX_PENDING, this.outbox);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('outbox_pending', this.outbox);
+  }
+
+  private reconcileUnsyncedLocalRecordsToOutbox(snapshot: CloudSnapshotData): number {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return 0;
+
+    let addedCount = 0;
+    const queueIfMissing = (
+      type: PendingWrite['type'],
+      id: string | undefined,
+      payload: any,
+      cloudSet: Set<string>,
+      deletedSet?: Set<string>
+    ) => {
+      if (!id || cloudSet.has(id) || deletedSet?.has(id)) return;
+      const alreadyQueued = this.outbox.some(
+        (w) => w.type === type && w.status !== 'synced' && (w.payload?.id === id || w.payload?.device_id === id || w.payload?.deviceId === id)
+      );
+      if (alreadyQueued) return;
+      this.enqueueWrite(type, payload, false);
+      addedCount += 1;
+    };
+
+    if (snapshot.authoritative.commuters) {
+      const cloudCommuters = new Set(snapshot.commuters.map((c) => c.device_id));
+      if (!cloudCommuters.has(this.deviceId) && !cloudCommuters.has(uid)) {
+        queueIfMissing('profile_update', this.deviceId, { ...this.userProfile }, cloudCommuters);
+      }
+    }
+
+    if (snapshot.authoritative.routes) {
+      const cloudRoutes = new Set(snapshot.routes.map((r) => r.id));
+      for (const r of this.routes) {
+        if (r.createdByDeviceId === this.deviceId || (r.ownerUid && r.ownerUid === uid)) {
+          queueIfMissing('add_route', r.id, { route: r }, cloudRoutes);
+        }
+      }
+    }
+
+    if (snapshot.authoritative.fareReports) {
+      const cloudFares = new Set(snapshot.fareReports.map((f) => f.id));
+      const delFares = this.getPendingDeletedIds('fare_delete');
+      for (const f of this.fareReports) {
+        if (this.isOwnerOf(f.ownerUid, f.reporter_device_id)) {
+          queueIfMissing('fare_report', f.id, f, cloudFares, delFares);
+        }
+      }
+    }
+
+    if (snapshot.authoritative.statusReports) {
+      const cloudStatuses = new Set(snapshot.statusReports.map((s) => s.id));
+      const delStatuses = this.getPendingDeletedIds('status_delete');
+      for (const s of this.statusReports) {
+        if (this.isOwnerOf(s.ownerUid, s.reporter_device_id)) {
+          queueIfMissing('status_report', s.id, s, cloudStatuses, delStatuses);
+        }
+      }
+    }
+
+    if (snapshot.authoritative.intercityReports) {
+      const cloudIc = new Set(snapshot.intercityReports.map((r) => r.id));
+      const delIc = this.getPendingDeletedIds('intercity_delete');
+      for (const r of this.intercityReports) {
+        if (this.isOwnerOf(r.ownerUid, r.reporterDeviceId)) {
+          queueIfMissing('intercity_report', r.id, r, cloudIc, delIc);
+        }
+      }
+    }
+
+    if (snapshot.authoritative.transporters) {
+      const cloudTrans = new Set(snapshot.transporters.map((t) => t.id));
+      const delTrans = this.getPendingDeletedIds('transporter_delete');
+      for (const t of this.transporters) {
+        if (this.isOwnerOf(t.ownerUid, t.registeredByDeviceId)) {
+          queueIfMissing('transporter_register', t.id, t, cloudTrans, delTrans);
+        }
+      }
+    }
+
+    if (snapshot.authoritative.socialInteractions) {
+      const cloudSoc = new Set(snapshot.socialInteractions.map((s) => s.id));
+      const delSoc = this.getPendingDeletedIds('social_interaction_delete');
+      for (const s of this.socialInteractions) {
+        if (this.isOwnerOf(s.ownerUid, s.deviceId)) {
+          queueIfMissing('social_interaction', s.id, s, cloudSoc, delSoc);
+        }
+      }
+    }
+
+    if (snapshot.authoritative.socialReplies) {
+      const cloudReplies = new Set(snapshot.socialReplies.map((r) => r.id));
+      const delReplies = this.getPendingDeletedIds('social_reply_delete');
+      for (const r of this.socialReplies) {
+        if (this.isOwnerOf(r.ownerUid, r.deviceId)) {
+          queueIfMissing('social_reply', r.id, r, cloudReplies, delReplies);
+        }
+      }
+    }
+
+    if (snapshot.authoritative.socialReactions) {
+      const cloudReacts = new Set(snapshot.socialReactions.map((r) => r.id));
+      const delReacts = this.getPendingDeletedIds('social_reaction_delete');
+      for (const r of this.socialReactions) {
+        if (this.isOwnerOf(r.ownerUid, r.deviceId)) {
+          queueIfMissing('social_reaction_record', r.id, r, cloudReacts, delReacts);
+        }
+      }
+    }
+
+    if (snapshot.authoritative.boardingConfirmations) {
+      const cloudBoardings = new Set(snapshot.boardingConfirmations.map((b) => b.id));
+      for (const b of this.boardingConfirmations) {
+        if (this.isOwnerOf(b.ownerUid, b.deviceId)) {
+          queueIfMissing('boarding_confirmation', b.id, b, cloudBoardings);
+        }
+      }
+    }
+
+    if (snapshot.authoritative.locationAnchors) {
+      const cloudAnchors = new Set(snapshot.locationAnchors.map((a) => a.deviceId));
+      const myAnchor = this.locationAnchors.find((a) => a.deviceId === this.deviceId);
+      if (myAnchor && !cloudAnchors.has(this.deviceId) && !cloudAnchors.has(uid)) {
+        queueIfMissing('location_anchor', this.deviceId, myAnchor, cloudAnchors);
+      }
+    }
+
+    return addedCount;
+  }
+
+  // --- CLOUD SYNC & OUTBOX FLUSH ---
+  public async flushOutbox(force = false): Promise<number> {
+    if (!this.isEffectivelyOnline()) return 0;
+
+    if (this.flushPromise) {
+      this.flushRequestedAgain = true;
+      return this.flushPromise;
+    }
+
+    this.flushPromise = (async () => {
+      let totalPushed = 0;
+
+      do {
+        this.flushRequestedAgain = false;
+
+        if (force) {
+          this.outbox.forEach((w) => {
+            if (w.status === 'failed') {
+              w.status = 'pending';
+            }
+          });
+        }
+
+        const pending = this.outbox.filter(
+          (w) => w.status === 'pending' || w.status === 'failed'
+        );
+        if (pending.length === 0) break;
+
+        this.isSyncing = true;
+        this.lastSyncError = null;
+        this.notifyChange();
+
+        let pushedInPass = 0;
+        let authBlocked = false;
+        let hitTransientError = false;
+        const ordered = [...pending].reverse();
+
+        for (const item of ordered) {
+          if (!this.isEffectivelyOnline()) {
+            item.status = 'failed';
+            item.retry_count += 1;
+            hitTransientError = true;
+            break;
+          }
+
+          item.status = 'syncing';
+          try {
+            await pushPendingWriteToCloud(item);
+            item.status = 'synced';
+            item.error = undefined;
+            pushedInPass += 1;
+            totalPushed += 1;
+          } catch (err: any) {
+            const msg = err?.message || 'Cloud sync error';
+            if (msg.includes('Sign in required')) {
+              item.status = 'pending';
+              item.error = msg;
+              this.lastSyncError = msg;
+              authBlocked = true;
+              break;
+            }
+            item.status = 'failed';
+            item.retry_count += 1;
+            item.error = msg;
+            this.lastSyncError = msg;
+            hitTransientError = true;
+          }
+        }
+
+        // Immediately clear synced items from queue so outbox never accumulates stale items
+        this.persistOutboxClearedSynced();
+
+        if (pushedInPass > 0) {
+          this.fastRetryAttempt = 0;
+          this.cloudConnected = true;
+          this.lastSyncedAt = Date.now();
+          safeSet(STORAGE_KEYS.LAST_SYNCED_AT, this.lastSyncedAt);
+        }
+
+        if (authBlocked) {
+          break;
+        }
+
+        if (hitTransientError && this.getPendingWritesCount() > 0) {
+          this.scheduleFastRetry();
+          break;
+        }
+      } while (this.flushRequestedAgain && this.isEffectivelyOnline());
+
+      this.isSyncing = false;
+      this.notifyChange();
+      return totalPushed;
+    })();
+
+    try {
+      return await this.flushPromise;
+    } finally {
+      this.flushPromise = null;
+    }
+  }
+
+  public async globalSyncNow(options?: {
+    force?: boolean;
+    reconcileLocal?: boolean;
+  }): Promise<{ pushed: number; pulled: boolean; error?: string }> {
+    const force = options?.force ?? true;
+    const reconcileLocal = options?.reconcileLocal ?? true;
+
     if (!this.isEffectivelyOnline()) {
       return {
         pushed: 0,
@@ -2368,35 +2808,58 @@ class FambaiOfflineStore {
       };
     }
 
-    let pushed = 0;
-    try {
-      await ensureCloudAuth();
-      pushed = await this.flushOutbox();
-      this.isSyncing = true;
-      this.notifyChange();
-
-      const snapshot = await pullAllFromCloud(this.deviceId);
-      this.applyCloudSnapshot(snapshot);
-      this.attachCloudListeners();
-
-      this.isSyncing = false;
-      this.notifyChange();
-      return { pushed, pulled: true, error: this.lastSyncError || undefined };
-    } catch (err: any) {
-      this.isSyncing = false;
-      this.lastSyncError = err?.message || 'Unable to reach cloud database';
-      this.notifyChange();
-      return { pushed, pulled: false, error: this.lastSyncError || undefined };
+    if (this.globalSyncPromise) {
+      return this.globalSyncPromise;
     }
+
+    this.globalSyncPromise = (async () => {
+      let pushed = 0;
+      try {
+        await ensureCloudAuth(force);
+        pushed += await this.flushOutbox(force);
+
+        this.isSyncing = true;
+        this.notifyChange();
+
+        let snapshot = await pullAllFromCloud(this.deviceId);
+
+        if (reconcileLocal && auth.currentUser) {
+          const reconciledCount = this.reconcileUnsyncedLocalRecordsToOutbox(snapshot);
+          if (reconciledCount > 0) {
+            this.isSyncing = false;
+            pushed += await this.flushOutbox(true);
+            this.isSyncing = true;
+            this.notifyChange();
+            snapshot = await pullAllFromCloud(this.deviceId);
+          }
+        }
+
+        this.applyCloudSnapshot(snapshot);
+        this.attachCloudListeners();
+
+        this.isSyncing = false;
+        this.notifyChange();
+        return { pushed, pulled: true, error: this.lastSyncError || undefined };
+      } catch (err: any) {
+        this.isSyncing = false;
+        this.lastSyncError = err?.message || 'Unable to reach cloud database';
+        this.notifyChange();
+        return { pushed, pulled: false, error: this.lastSyncError || undefined };
+      } finally {
+        this.globalSyncPromise = null;
+      }
+    })();
+
+    return this.globalSyncPromise;
   }
 
   private startBackgroundSync(): void {
     if (this.syncTimer) clearInterval(this.syncTimer);
     this.syncTimer = setInterval(() => {
-      if (this.getPendingWritesCount() > 0 && this.isEffectivelyOnline()) {
+      if (this.isEffectivelyOnline() && this.getPendingWritesCount() > 0) {
         this.flushOutbox();
       }
-    }, 15000);
+    }, 10000);
   }
 
   public getMyReports(): { fares: FareReport[]; statuses: StatusReport[] } {

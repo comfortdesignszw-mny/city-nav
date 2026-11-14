@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
+  linkWithPopup,
   onAuthStateChanged,
   signInAnonymously,
   signInWithPopup,
@@ -71,10 +72,22 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
-export async function ensureCloudAuth(): Promise<User | null> {
-  if (auth.currentUser) return auth.currentUser;
+export async function ensureCloudAuth(forceRetry = false): Promise<User | null> {
+  // Wait for Firebase Auth IndexedDB persistence to restore before checking currentUser
+  try {
+    if (typeof auth.authStateReady === 'function') {
+      await auth.authStateReady();
+    }
+  } catch {
+    // Ignore authStateReady errors offline
+  }
+
+  if (auth.currentUser) {
+    anonAuthBlocked = false;
+    return auth.currentUser;
+  }
   if (typeof navigator !== 'undefined' && !navigator.onLine) return null;
-  if (anonAuthBlocked) return null;
+  if (anonAuthBlocked && !forceRetry) return null;
 
   if (anonAttemptPromise) return anonAttemptPromise;
 
@@ -102,6 +115,22 @@ export async function ensureCloudAuth(): Promise<User | null> {
 
 export async function signInWithGoogle(): Promise<{ user: User | null; error?: string }> {
   try {
+    if (auth.currentUser && auth.currentUser.isAnonymous) {
+      try {
+        const linked = await linkWithPopup(auth.currentUser, googleProvider);
+        anonAuthBlocked = false;
+        return { user: linked.user };
+      } catch (linkErr: any) {
+        const linkCode = linkErr?.code || '';
+        if (
+          linkCode !== 'auth/credential-already-in-use' &&
+          linkCode !== 'auth/email-already-in-use' &&
+          linkCode !== 'auth/provider-already-linked'
+        ) {
+          throw linkErr;
+        }
+      }
+    }
     const result = await signInWithPopup(auth, googleProvider);
     anonAuthBlocked = false;
     return { user: result.user };

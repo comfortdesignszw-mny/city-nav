@@ -4,6 +4,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  getDocsFromServer,
   onSnapshot,
   query,
   setDoc,
@@ -42,6 +43,20 @@ export interface CloudSnapshotData {
   boardingConfirmations: BoardingConfirmation[];
   locationAnchors: LocationAnchor[];
   privatePhone?: string;
+  authoritative: {
+    commuters: boolean;
+    routes: boolean;
+    fareReports: boolean;
+    statusReports: boolean;
+    intercityReports: boolean;
+    transporters: boolean;
+    socialInteractions: boolean;
+    socialReplies: boolean;
+    socialReactions: boolean;
+    notifications: boolean;
+    boardingConfirmations: boolean;
+    locationAnchors: boolean;
+  };
 }
 
 function stripUndefined<T extends Record<string, any>>(obj: T): Record<string, any> {
@@ -54,16 +69,23 @@ function stripUndefined<T extends Record<string, any>>(obj: T): Record<string, a
   return clean;
 }
 
+function nonEmpty(val: string | undefined | null, maxLen: number): string | undefined {
+  if (!val) return undefined;
+  const trimmed = val.trim();
+  if (!trimmed) return undefined;
+  return trimmed.slice(0, maxLen);
+}
+
 function sanitizeCommuterForCloud(profile: UserProfile, uid: string): Record<string, any> {
   return stripUndefined({
     device_id: profile.device_id,
     userId: (profile.userId || uid).slice(0, 128),
     ownerUid: uid,
-    username: (profile.username || 'Commuter').slice(0, 40),
-    handle: (profile.handle || '@commuter').slice(0, 45),
-    name: profile.name ? profile.name.slice(0, 60) : undefined,
-    avatarColor: (profile.avatarColor || '#F27D26').slice(0, 20),
-    commuterBadge: (profile.commuterBadge || 'Daily Commuter').slice(0, 60),
+    username: nonEmpty(profile.username, 40) || 'Commuter',
+    handle: nonEmpty(profile.handle, 45) || '@commuter',
+    name: profile.name !== undefined ? profile.name.slice(0, 60) : undefined,
+    avatarColor: nonEmpty(profile.avatarColor, 20) || '#F27D26',
+    commuterBadge: nonEmpty(profile.commuterBadge, 60) || 'Daily Commuter',
     role: profile.role === 'transporter' ? 'transporter' : 'commuter',
     reputation_score: Number(profile.reputation_score || 0),
     reports_count: Number(profile.reports_count || 0),
@@ -75,18 +97,18 @@ function sanitizeCommuterForCloud(profile: UserProfile, uid: string): Record<str
 function sanitizeRouteForCloud(route: RouteItem, uid: string): Record<string, any> {
   return stripUndefined({
     id: route.id,
-    name: route.name.slice(0, 120),
-    origin: route.origin.slice(0, 100),
-    destination: route.destination.slice(0, 100),
-    city: route.city.slice(0, 60),
-    province: route.province ? route.province.slice(0, 60) : undefined,
+    name: (nonEmpty(route.name, 120) || 'Commuter Route'),
+    origin: (nonEmpty(route.origin, 100) || 'Origin'),
+    destination: (nonEmpty(route.destination, 100) || 'Destination'),
+    city: (nonEmpty(route.city, 60) || 'Harare'),
+    province: route.province !== undefined ? route.province.slice(0, 60) : undefined,
     category: route.category || 'cbd_location',
     distanceKm: typeof route.distanceKm === 'number' ? route.distanceKm : undefined,
-    commonVehicle: route.commonVehicle ? route.commonVehicle.slice(0, 100) : undefined,
+    commonVehicle: route.commonVehicle !== undefined ? route.commonVehicle.slice(0, 100) : undefined,
     ranksServedIds: Array.isArray(route.ranksServedIds) ? route.ranksServedIds.slice(0, 20) : [],
     waypoints: Array.isArray(route.waypoints) ? route.waypoints.slice(0, 30) : [],
-    createdByDeviceId: route.createdByDeviceId,
-    createdByUsername: route.createdByUsername ? route.createdByUsername.slice(0, 40) : undefined,
+    createdByDeviceId: nonEmpty(route.createdByDeviceId, 128),
+    createdByUsername: nonEmpty(route.createdByUsername, 40),
     ownerUid: uid,
     createdAt: Number(route.createdAt || Date.now()),
   });
@@ -96,20 +118,20 @@ function sanitizeFareForCloud(fare: FareReport, uid: string): Record<string, any
   return stripUndefined({
     id: fare.id,
     route_id: fare.route_id,
-    fare_amount: Number(fare.fare_amount),
+    fare_amount: Math.max(0.01, Number(fare.fare_amount)),
     currency: fare.currency,
     reported_at: Number(fare.reported_at),
     reporter_device_id: fare.reporter_device_id,
     ownerUid: uid,
-    reporter_username: fare.reporter_username ? fare.reporter_username.slice(0, 40) : undefined,
-    reporter_badge: fare.reporter_badge ? fare.reporter_badge.slice(0, 60) : undefined,
+    reporter_username: nonEmpty(fare.reporter_username, 40),
+    reporter_badge: nonEmpty(fare.reporter_badge, 60),
     upvotes: Number(fare.upvotes || 0),
     downvotes: Number(fare.downvotes || 0),
-    source: fare.source ? fare.source.slice(0, 20) : undefined,
-    transport_type: fare.transport_type ? fare.transport_type.slice(0, 100) : undefined,
-    departure_status: fare.departure_status ? fare.departure_status.slice(0, 120) : undefined,
-    route_name: fare.route_name ? fare.route_name.slice(0, 120) : undefined,
-    city: fare.city ? fare.city.slice(0, 60) : undefined,
+    source: nonEmpty(fare.source, 20),
+    transport_type: nonEmpty(fare.transport_type, 100),
+    departure_status: nonEmpty(fare.departure_status, 120),
+    route_name: nonEmpty(fare.route_name, 120),
+    city: nonEmpty(fare.city, 60),
   });
 }
 
@@ -123,8 +145,8 @@ function sanitizeStatusForCloud(status: StatusReport, uid: string): Record<strin
     expires_at: Number(status.expires_at),
     reporter_device_id: status.reporter_device_id,
     ownerUid: uid,
-    reporter_username: status.reporter_username ? status.reporter_username.slice(0, 40) : undefined,
-    source: status.source ? status.source.slice(0, 20) : undefined,
+    reporter_username: nonEmpty(status.reporter_username, 40),
+    source: nonEmpty(status.source, 20),
   });
 }
 
@@ -133,19 +155,19 @@ function sanitizeIntercityForCloud(rep: IntercityReport, uid: string): Record<st
     id: rep.id,
     routeId: rep.routeId,
     operatorId: rep.operatorId,
-    operatorName: rep.operatorName.slice(0, 100),
-    farePaidUSD: Number(rep.farePaidUSD),
+    operatorName: nonEmpty(rep.operatorName, 100) || 'Intercity Coach',
+    farePaidUSD: Math.max(0.01, Number(rep.farePaidUSD)),
     farePaidZiG: typeof rep.farePaidZiG === 'number' ? rep.farePaidZiG : undefined,
     farePaidZAR: typeof rep.farePaidZAR === 'number' ? rep.farePaidZAR : undefined,
-    departureTime: rep.departureTime ? rep.departureTime.slice(0, 40) : undefined,
-    departureTerminal: rep.departureTerminal.slice(0, 120),
+    departureTime: rep.departureTime !== undefined ? rep.departureTime.slice(0, 40) : undefined,
+    departureTerminal: nonEmpty(rep.departureTerminal, 120) || 'Main Terminus',
     seatAvailability: rep.seatAvailability,
-    busConditionRating: Number(rep.busConditionRating),
-    roadStatusNote: rep.roadStatusNote ? rep.roadStatusNote.slice(0, 150) : undefined,
+    busConditionRating: Math.min(5, Math.max(1, Number(rep.busConditionRating || 3))),
+    roadStatusNote: rep.roadStatusNote !== undefined ? rep.roadStatusNote.slice(0, 150) : undefined,
     reportedAt: Number(rep.reportedAt),
     reporterDeviceId: rep.reporterDeviceId,
     ownerUid: uid,
-    reporterUsername: rep.reporterUsername ? rep.reporterUsername.slice(0, 40) : undefined,
+    reporterUsername: nonEmpty(rep.reporterUsername, 40),
     upvotes: Number(rep.upvotes || 0),
     downvotes: Number(rep.downvotes || 0),
   });
@@ -154,23 +176,23 @@ function sanitizeIntercityForCloud(rep: IntercityReport, uid: string): Record<st
 function sanitizeTransporterForCloud(t: TransporterProfile, uid: string): Record<string, any> {
   return stripUndefined({
     id: t.id,
-    operatorName: t.operatorName.slice(0, 100),
-    contactPhone: t.contactPhone.slice(0, 40),
+    operatorName: nonEmpty(t.operatorName, 100) || 'Transporter',
+    contactPhone: (nonEmpty(t.contactPhone, 40) || '0000').padEnd(4, '0'),
     transportType: t.transportType,
-    transportTypeLabel: t.transportTypeLabel.slice(0, 80),
-    currentRouteName: t.currentRouteName.slice(0, 120),
-    currentRouteId: t.currentRouteId,
-    city: t.city.slice(0, 60),
-    vehiclePlate: t.vehiclePlate ? t.vehiclePlate.slice(0, 30) : undefined,
-    baseTerminus: t.baseTerminus ? t.baseTerminus.slice(0, 100) : undefined,
+    transportTypeLabel: nonEmpty(t.transportTypeLabel, 80) || 'Commuter Vehicle',
+    currentRouteName: nonEmpty(t.currentRouteName, 120) || 'Local Route',
+    currentRouteId: nonEmpty(t.currentRouteId, 128),
+    city: nonEmpty(t.city, 60) || 'Harare',
+    vehiclePlate: t.vehiclePlate !== undefined ? t.vehiclePlate.slice(0, 30) : undefined,
+    baseTerminus: t.baseTerminus !== undefined ? t.baseTerminus.slice(0, 100) : undefined,
     status: t.status,
-    statusNote: t.statusNote ? t.statusNote.slice(0, 160) : undefined,
+    statusNote: t.statusNote !== undefined ? t.statusNote.slice(0, 160) : undefined,
     registeredAt: Number(t.registeredAt),
     lastRouteUpdate: Number(t.lastRouteUpdate),
     registeredByDeviceId: t.registeredByDeviceId,
     ownerUid: uid,
-    username: t.username ? t.username.slice(0, 40) : undefined,
-    userHandle: t.userHandle ? t.userHandle.slice(0, 45) : undefined,
+    username: nonEmpty(t.username, 40),
+    userHandle: nonEmpty(t.userHandle, 45),
     likes: Number(t.likes || 0),
   });
 }
@@ -179,14 +201,14 @@ function sanitizeSocialForCloud(item: CommuterSocialInteraction, uid: string): R
   return stripUndefined({
     id: item.id,
     targetType: item.targetType,
-    targetId: item.targetId,
-    targetName: item.targetName.slice(0, 120),
+    targetId: nonEmpty(item.targetId, 128) || 'general',
+    targetName: nonEmpty(item.targetName, 120) || 'Commuter Buzz',
     postType: item.postType || (item.isAbuseReport ? 'abuse' : 'review'),
-    username: item.username.slice(0, 40),
-    userHandle: item.userHandle.slice(0, 45),
-    userBadge: (item.userBadge || 'Daily Commuter').slice(0, 60),
-    avatarBg: (item.avatarBg || '#F27D26').slice(0, 20),
-    comment: item.comment.slice(0, 500),
+    username: nonEmpty(item.username, 40) || 'Commuter',
+    userHandle: nonEmpty(item.userHandle, 45) || '@commuter',
+    userBadge: nonEmpty(item.userBadge, 60) || 'Daily Commuter',
+    avatarBg: nonEmpty(item.avatarBg, 20) || '#F27D26',
+    comment: nonEmpty(item.comment, 500) || 'Commuter update',
     rating: typeof item.rating === 'number' ? item.rating : undefined,
     likes: Number(item.likes || 0),
     dislikes: Number(item.dislikes || 0),
@@ -196,19 +218,19 @@ function sanitizeSocialForCloud(item: CommuterSocialInteraction, uid: string): R
     ownerUid: uid,
     mentionedHandles: Array.isArray(item.mentionedHandles) ? item.mentionedHandles.slice(0, 20) : undefined,
     mentionedDeviceIds: Array.isArray(item.mentionedDeviceIds) ? item.mentionedDeviceIds.slice(0, 20) : undefined,
-    recommendedLocation: item.recommendedLocation ? item.recommendedLocation.slice(0, 120) : undefined,
-    recommendedCommuterUsername: item.recommendedCommuterUsername
-      ? item.recommendedCommuterUsername.slice(0, 60)
-      : undefined,
+    recommendedLocation: item.recommendedLocation !== undefined ? item.recommendedLocation.slice(0, 120) : undefined,
+    recommendedCommuterUsername:
+      item.recommendedCommuterUsername !== undefined
+        ? item.recommendedCommuterUsername.slice(0, 60)
+        : undefined,
     confirmedFare: item.confirmedFare ? stripUndefined(item.confirmedFare) : undefined,
-    confirmedDepartureTime: item.confirmedDepartureTime
-      ? item.confirmedDepartureTime.slice(0, 80)
-      : undefined,
+    confirmedDepartureTime:
+      item.confirmedDepartureTime !== undefined ? item.confirmedDepartureTime.slice(0, 80) : undefined,
     amenitiesReview: item.amenitiesReview ? stripUndefined(item.amenitiesReview) : undefined,
     isAbuseReport: typeof item.isAbuseReport === 'boolean' ? item.isAbuseReport : undefined,
-    abuseType: item.abuseType ? item.abuseType.slice(0, 40) : undefined,
-    abuseLocation: item.abuseLocation ? item.abuseLocation.slice(0, 100) : undefined,
-    abusePlateNumber: item.abusePlateNumber ? item.abusePlateNumber.slice(0, 30) : undefined,
+    abuseType: nonEmpty(item.abuseType, 40),
+    abuseLocation: item.abuseLocation !== undefined ? item.abuseLocation.slice(0, 100) : undefined,
+    abusePlateNumber: item.abusePlateNumber !== undefined ? item.abusePlateNumber.slice(0, 30) : undefined,
   });
 }
 
@@ -216,15 +238,15 @@ function sanitizeReplyForCloud(reply: SocialReply, uid: string): Record<string, 
   return stripUndefined({
     id: reply.id,
     interactionId: reply.interactionId,
-    parentAuthorDeviceId: reply.parentAuthorDeviceId,
-    parentAuthorUsername: reply.parentAuthorUsername ? reply.parentAuthorUsername.slice(0, 40) : undefined,
+    parentAuthorDeviceId: nonEmpty(reply.parentAuthorDeviceId, 128),
+    parentAuthorUsername: nonEmpty(reply.parentAuthorUsername, 40),
     deviceId: reply.deviceId,
     ownerUid: uid,
-    username: reply.username.slice(0, 40),
-    userHandle: reply.userHandle.slice(0, 45),
-    userBadge: (reply.userBadge || 'Daily Commuter').slice(0, 60),
-    avatarBg: (reply.avatarBg || '#F27D26').slice(0, 20),
-    comment: reply.comment.slice(0, 500),
+    username: nonEmpty(reply.username, 40) || 'Commuter',
+    userHandle: nonEmpty(reply.userHandle, 45) || '@commuter',
+    userBadge: nonEmpty(reply.userBadge, 60) || 'Daily Commuter',
+    avatarBg: nonEmpty(reply.avatarBg, 20) || '#F27D26',
+    comment: nonEmpty(reply.comment, 500) || 'Reply',
     mentionedHandles: Array.isArray(reply.mentionedHandles) ? reply.mentionedHandles.slice(0, 20) : undefined,
     mentionedDeviceIds: Array.isArray(reply.mentionedDeviceIds) ? reply.mentionedDeviceIds.slice(0, 20) : undefined,
     createdAt: Number(reply.createdAt),
@@ -240,7 +262,7 @@ function sanitizeReactionForCloud(rec: SocialReactionRecord, uid: string): Recor
     reaction: rec.reaction,
     deviceId: rec.deviceId,
     ownerUid: uid,
-    username: rec.username ? rec.username.slice(0, 40) : undefined,
+    username: nonEmpty(rec.username, 40),
     createdAt: Number(rec.createdAt),
     updatedAt: Number(rec.updatedAt),
   });
@@ -251,15 +273,15 @@ function sanitizeNotificationForCloud(n: CommuterNotification, uid: string): Rec
     id: n.id,
     type: n.type,
     recipientDeviceId: n.recipientDeviceId,
-    recipientUid: n.recipientUid || undefined,
+    recipientUid: nonEmpty(n.recipientUid, 128),
     senderDeviceId: n.senderDeviceId,
     senderUid: uid,
-    senderUsername: n.senderUsername.slice(0, 40),
-    senderHandle: n.senderHandle.slice(0, 45),
-    targetType: n.targetType.slice(0, 40),
-    targetId: n.targetId.slice(0, 128),
-    postId: n.postId ? n.postId.slice(0, 128) : undefined,
-    snippet: n.snippet.slice(0, 200),
+    senderUsername: nonEmpty(n.senderUsername, 40) || 'Commuter',
+    senderHandle: nonEmpty(n.senderHandle, 45) || '@commuter',
+    targetType: nonEmpty(n.targetType, 40) || 'buzz',
+    targetId: nonEmpty(n.targetId, 128) || n.id,
+    postId: nonEmpty(n.postId, 128),
+    snippet: nonEmpty(n.snippet, 200) || 'New Commuter Buzz activity',
     read: Boolean(n.read),
     createdAt: Number(n.createdAt),
   });
@@ -269,16 +291,16 @@ function sanitizeBoardingForCloud(b: BoardingConfirmation, uid: string): Record<
   return stripUndefined({
     id: b.id,
     rankId: b.rankId,
-    rankName: b.rankName.slice(0, 120),
-    city: b.city.slice(0, 60),
+    rankName: nonEmpty(b.rankName, 120) || 'Rank',
+    city: nonEmpty(b.city, 60) || 'Harare',
     deviceId: b.deviceId,
     ownerUid: uid,
-    username: b.username.slice(0, 40),
-    userHandle: b.userHandle.slice(0, 45),
-    statement: b.statement.slice(0, 120),
+    username: nonEmpty(b.username, 40) || 'Commuter',
+    userHandle: nonEmpty(b.userHandle, 45) || '@commuter',
+    statement: nonEmpty(b.statement, 120) || 'I boarded here',
     lat: typeof b.lat === 'number' ? b.lat : undefined,
     lng: typeof b.lng === 'number' ? b.lng : undefined,
-    locationSource: b.locationSource,
+    locationSource: nonEmpty(b.locationSource, 20),
     createdAt: Number(b.createdAt),
   });
 }
@@ -287,20 +309,61 @@ function sanitizeLocationAnchorForCloud(anchor: LocationAnchor, uid: string): Re
   return stripUndefined({
     deviceId: anchor.deviceId,
     ownerUid: uid,
-    username: anchor.username.slice(0, 40),
+    username: nonEmpty(anchor.username, 40) || 'Commuter',
     lat: Number(anchor.lat),
     lng: Number(anchor.lng),
-    name: anchor.name.slice(0, 120),
+    name: nonEmpty(anchor.name, 120) || 'Current Location',
     source: anchor.source,
     accuracyMeters: typeof anchor.accuracyMeters === 'number' ? anchor.accuracyMeters : undefined,
-    nearestRankId: anchor.nearestRankId,
-    nearestRankName: anchor.nearestRankName ? anchor.nearestRankName.slice(0, 120) : undefined,
+    nearestRankId: nonEmpty(anchor.nearestRankId, 128),
+    nearestRankName: nonEmpty(anchor.nearestRankName, 120),
     timestamp: Number(anchor.timestamp),
   });
 }
 
+async function safeDeleteCloudDoc(collectionName: string, docId: string, uid: string): Promise<void> {
+  const ref = doc(db, collectionName, docId);
+  const path = `${collectionName}/${docId}`;
+  try {
+    const existingSnap = await getDoc(ref);
+    if (!existingSnap.exists()) {
+      return;
+    }
+    const data = existingSnap.data() as { ownerUid?: string } | undefined;
+    if (data?.ownerUid && data.ownerUid !== uid) {
+      return;
+    }
+    await deleteDoc(ref);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+async function safeUpdateCloudDoc(
+  collectionName: string,
+  docId: string,
+  updates: Record<string, any>,
+  uid: string
+): Promise<void> {
+  const ref = doc(db, collectionName, docId);
+  const path = `${collectionName}/${docId}`;
+  try {
+    const existingSnap = await getDoc(ref);
+    if (!existingSnap.exists()) {
+      return;
+    }
+    const data = existingSnap.data() as { ownerUid?: string } | undefined;
+    if (data?.ownerUid && data.ownerUid !== uid) {
+      return;
+    }
+    await updateDoc(ref, stripUndefined(updates));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
 export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void> {
-  const user = auth.currentUser || (await ensureCloudAuth());
+  const user = auth.currentUser || (await ensureCloudAuth(false));
   if (!user) {
     throw new Error('Sign in required for cloud sync (all edits saved safely in local SQLite).');
   }
@@ -309,16 +372,29 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
 
   switch (type) {
     case 'profile_update': {
-      const path = `commuters/${payload.device_id}`;
+      const targetDocId = payload.device_id;
+      const path = `commuters/${targetDocId}`;
       try {
-        await setDoc(doc(db, 'commuters', payload.device_id), sanitizeCommuterForCloud(payload, uid), {
-          merge: true,
-        });
+        const ref = doc(db, 'commuters', targetDocId);
+        const existingSnap = await getDoc(ref);
+        if (existingSnap.exists()) {
+          const existingData = existingSnap.data() as { ownerUid?: string };
+          if (existingData?.ownerUid && existingData.ownerUid !== uid) {
+            // Device ID slot belongs to a prior UID; store under uid-scoped doc so profile stays synced
+            await setDoc(
+              doc(db, 'commuters', uid),
+              sanitizeCommuterForCloud({ ...payload, device_id: uid }, uid),
+              { merge: true }
+            );
+            break;
+          }
+        }
+        await setDoc(ref, sanitizeCommuterForCloud(payload, uid), { merge: true });
         if (payload.phone !== undefined) {
           await setDoc(
-            doc(db, 'commuters', payload.device_id, 'private', 'contact'),
+            doc(db, 'commuters', targetDocId, 'private', 'contact'),
             stripUndefined({
-              device_id: payload.device_id,
+              device_id: targetDocId,
               ownerUid: uid,
               phone: String(payload.phone || '').slice(0, 40),
               updatedAt: Number(payload.updatedAt || Date.now()),
@@ -335,8 +411,9 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     case 'private_profile_update': {
       const path = `commuters/${payload.device_id}/private/contact`;
       try {
+        const ref = doc(db, 'commuters', payload.device_id, 'private', 'contact');
         await setDoc(
-          doc(db, 'commuters', payload.device_id, 'private', 'contact'),
+          ref,
           stripUndefined({
             device_id: payload.device_id,
             ownerUid: uid,
@@ -355,13 +432,13 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
       const { route, fare, status } = payload;
       try {
         if (route) {
-          await setDoc(doc(db, 'routes', route.id), sanitizeRouteForCloud(route, uid));
+          await setDoc(doc(db, 'routes', route.id), sanitizeRouteForCloud(route, uid), { merge: true });
         }
         if (fare) {
-          await setDoc(doc(db, 'fare_reports', fare.id), sanitizeFareForCloud(fare, uid));
+          await setDoc(doc(db, 'fare_reports', fare.id), sanitizeFareForCloud(fare, uid), { merge: true });
         }
         if (status) {
-          await setDoc(doc(db, 'status_reports', status.id), sanitizeStatusForCloud(status, uid));
+          await setDoc(doc(db, 'status_reports', status.id), sanitizeStatusForCloud(status, uid), { merge: true });
         }
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, `routes/${route?.id || ''}`);
@@ -372,7 +449,7 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     case 'fare_report': {
       const path = `fare_reports/${payload.id}`;
       try {
-        await setDoc(doc(db, 'fare_reports', payload.id), sanitizeFareForCloud(payload, uid));
+        await setDoc(doc(db, 'fare_reports', payload.id), sanitizeFareForCloud(payload, uid), { merge: true });
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, path);
       }
@@ -380,19 +457,14 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     }
 
     case 'fare_delete': {
-      const path = `fare_reports/${payload.id}`;
-      try {
-        await deleteDoc(doc(db, 'fare_reports', payload.id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, path);
-      }
+      await safeDeleteCloudDoc('fare_reports', payload.id, uid);
       break;
     }
 
     case 'status_report': {
       const path = `status_reports/${payload.id}`;
       try {
-        await setDoc(doc(db, 'status_reports', payload.id), sanitizeStatusForCloud(payload, uid));
+        await setDoc(doc(db, 'status_reports', payload.id), sanitizeStatusForCloud(payload, uid), { merge: true });
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, path);
       }
@@ -400,19 +472,16 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     }
 
     case 'status_delete': {
-      const path = `status_reports/${payload.id}`;
-      try {
-        await deleteDoc(doc(db, 'status_reports', payload.id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, path);
-      }
+      await safeDeleteCloudDoc('status_reports', payload.id, uid);
       break;
     }
 
     case 'intercity_report': {
       const path = `intercity_reports/${payload.id}`;
       try {
-        await setDoc(doc(db, 'intercity_reports', payload.id), sanitizeIntercityForCloud(payload, uid));
+        await setDoc(doc(db, 'intercity_reports', payload.id), sanitizeIntercityForCloud(payload, uid), {
+          merge: true,
+        });
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, path);
       }
@@ -420,19 +489,16 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     }
 
     case 'intercity_delete': {
-      const path = `intercity_reports/${payload.id}`;
-      try {
-        await deleteDoc(doc(db, 'intercity_reports', payload.id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, path);
-      }
+      await safeDeleteCloudDoc('intercity_reports', payload.id, uid);
       break;
     }
 
     case 'transporter_register': {
       const path = `transporters/${payload.id}`;
       try {
-        await setDoc(doc(db, 'transporters', payload.id), sanitizeTransporterForCloud(payload, uid));
+        await setDoc(doc(db, 'transporters', payload.id), sanitizeTransporterForCloud(payload, uid), {
+          merge: true,
+        });
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, path);
       }
@@ -440,22 +506,12 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     }
 
     case 'transporter_update': {
-      const path = `transporters/${payload.id}`;
-      try {
-        await updateDoc(doc(db, 'transporters', payload.id), stripUndefined(payload.updates));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, path);
-      }
+      await safeUpdateCloudDoc('transporters', payload.id, payload.updates || {}, uid);
       break;
     }
 
     case 'transporter_delete': {
-      const path = `transporters/${payload.id}`;
-      try {
-        await deleteDoc(doc(db, 'transporters', payload.id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, path);
-      }
+      await safeDeleteCloudDoc('transporters', payload.id, uid);
       break;
     }
 
@@ -464,7 +520,8 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
       try {
         await setDoc(
           doc(db, 'social_interactions', payload.id),
-          sanitizeSocialForCloud(payload, uid)
+          sanitizeSocialForCloud(payload, uid),
+          { merge: true }
         );
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, path);
@@ -473,29 +530,21 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     }
 
     case 'social_interaction_edit': {
-      const path = `social_interactions/${payload.id}`;
-      try {
-        await updateDoc(doc(db, 'social_interactions', payload.id), stripUndefined(payload.updates));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, path);
-      }
+      await safeUpdateCloudDoc('social_interactions', payload.id, payload.updates || {}, uid);
       break;
     }
 
     case 'social_interaction_delete': {
-      const path = `social_interactions/${payload.id}`;
-      try {
-        await deleteDoc(doc(db, 'social_interactions', payload.id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, path);
-      }
+      await safeDeleteCloudDoc('social_interactions', payload.id, uid);
       break;
     }
 
     case 'social_reply': {
       const path = `social_replies/${payload.id}`;
       try {
-        await setDoc(doc(db, 'social_replies', payload.id), sanitizeReplyForCloud(payload, uid));
+        await setDoc(doc(db, 'social_replies', payload.id), sanitizeReplyForCloud(payload, uid), {
+          merge: true,
+        });
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, path);
       }
@@ -503,22 +552,12 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     }
 
     case 'social_reply_edit': {
-      const path = `social_replies/${payload.id}`;
-      try {
-        await updateDoc(doc(db, 'social_replies', payload.id), stripUndefined(payload.updates));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, path);
-      }
+      await safeUpdateCloudDoc('social_replies', payload.id, payload.updates || {}, uid);
       break;
     }
 
     case 'social_reply_delete': {
-      const path = `social_replies/${payload.id}`;
-      try {
-        await deleteDoc(doc(db, 'social_replies', payload.id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, path);
-      }
+      await safeDeleteCloudDoc('social_replies', payload.id, uid);
       break;
     }
 
@@ -537,12 +576,7 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     }
 
     case 'social_reaction_delete': {
-      const path = `social_reactions/${payload.id}`;
-      try {
-        await deleteDoc(doc(db, 'social_reactions', payload.id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, path);
-      }
+      await safeDeleteCloudDoc('social_reactions', payload.id, uid);
       break;
     }
 
@@ -551,7 +585,8 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
       try {
         await setDoc(
           doc(db, 'notifications', payload.id),
-          sanitizeNotificationForCloud(payload, uid)
+          sanitizeNotificationForCloud(payload, uid),
+          { merge: true }
         );
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, path);
@@ -562,9 +597,12 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     case 'notification_update': {
       const path = `notifications/${payload.id}`;
       try {
-        await updateDoc(doc(db, 'notifications', payload.id), {
-          read: Boolean(payload.read),
-        });
+        const ref = doc(db, 'notifications', payload.id);
+        const snap = await getDoc(ref);
+        if (!snap.exists()) break;
+        const data = snap.data() as { recipientUid?: string };
+        if (data?.recipientUid !== uid) break;
+        await updateDoc(ref, { read: Boolean(payload.read) });
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, path);
       }
@@ -576,7 +614,8 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
       try {
         await setDoc(
           doc(db, 'boarding_confirmations', payload.id),
-          sanitizeBoardingForCloud(payload, uid)
+          sanitizeBoardingForCloud(payload, uid),
+          { merge: true }
         );
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, path);
@@ -587,11 +626,20 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     case 'location_anchor': {
       const path = `location_anchors/${payload.deviceId}`;
       try {
-        await setDoc(
-          doc(db, 'location_anchors', payload.deviceId),
-          sanitizeLocationAnchorForCloud(payload, uid),
-          { merge: true }
-        );
+        const ref = doc(db, 'location_anchors', payload.deviceId);
+        const existingSnap = await getDoc(ref);
+        if (existingSnap.exists()) {
+          const existingData = existingSnap.data() as { ownerUid?: string };
+          if (existingData?.ownerUid && existingData.ownerUid !== uid) {
+            await setDoc(
+              doc(db, 'location_anchors', uid),
+              sanitizeLocationAnchorForCloud({ ...payload, deviceId: uid }, uid),
+              { merge: true }
+            );
+            break;
+          }
+        }
+        await setDoc(ref, sanitizeLocationAnchorForCloud(payload, uid), { merge: true });
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, path);
       }
@@ -608,26 +656,37 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
 }
 
 export async function pullAllFromCloud(currentDeviceId?: string): Promise<CloudSnapshotData> {
-  const fetchCollection = async <T>(name: string): Promise<T[]> => {
+  const fetchCollection = async <T>(name: string): Promise<{ items: T[]; ok: boolean }> => {
     try {
-      const snap = await getDocs(collection(db, name));
-      return snap.docs.map((d) => d.data() as T);
+      const snap = await getDocsFromServer(collection(db, name));
+      return { items: snap.docs.map((d) => d.data() as T), ok: true };
     } catch {
-      return [];
+      try {
+        const snap = await getDocs(collection(db, name));
+        return { items: snap.docs.map((d) => d.data() as T), ok: true };
+      } catch {
+        return { items: [], ok: false };
+      }
     }
   };
 
   const uid = auth.currentUser?.uid || null;
 
-  const fetchNotifications = async (): Promise<CommuterNotification[]> => {
-    if (!uid) return [];
+  const fetchNotifications = async (): Promise<{ items: CommuterNotification[]; ok: boolean }> => {
+    if (!uid) return { items: [], ok: false };
     try {
-      const snap = await getDocs(
-        query(collection(db, 'notifications'), where('recipientUid', '==', uid))
-      );
-      return snap.docs.map((d) => d.data() as CommuterNotification);
+      const q = query(collection(db, 'notifications'), where('recipientUid', '==', uid));
+      const snap = await getDocsFromServer(q);
+      return { items: snap.docs.map((d) => d.data() as CommuterNotification), ok: true };
     } catch {
-      return [];
+      try {
+        const snap = await getDocs(
+          query(collection(db, 'notifications'), where('recipientUid', '==', uid))
+        );
+        return { items: snap.docs.map((d) => d.data() as CommuterNotification), ok: true };
+      } catch {
+        return { items: [], ok: false };
+      }
     }
   };
 
@@ -646,18 +705,18 @@ export async function pullAllFromCloud(currentDeviceId?: string): Promise<CloudS
   };
 
   const [
-    commuters,
-    routes,
-    fareReports,
-    statusReports,
-    intercityReports,
-    transporters,
-    socialInteractions,
-    socialReplies,
-    socialReactions,
-    notifications,
-    boardingConfirmations,
-    locationAnchors,
+    commutersRes,
+    routesRes,
+    fareReportsRes,
+    statusReportsRes,
+    intercityReportsRes,
+    transportersRes,
+    socialInteractionsRes,
+    socialRepliesRes,
+    socialReactionsRes,
+    notificationsRes,
+    boardingConfirmationsRes,
+    locationAnchorsRes,
     privatePhone,
   ] = await Promise.all([
     fetchCollection<UserProfile>('commuters'),
@@ -676,19 +735,33 @@ export async function pullAllFromCloud(currentDeviceId?: string): Promise<CloudS
   ]);
 
   return {
-    commuters,
-    routes,
-    fareReports,
-    statusReports,
-    intercityReports,
-    transporters,
-    socialInteractions,
-    socialReplies,
-    socialReactions,
-    notifications,
-    boardingConfirmations,
-    locationAnchors,
+    commuters: commutersRes.items,
+    routes: routesRes.items,
+    fareReports: fareReportsRes.items,
+    statusReports: statusReportsRes.items,
+    intercityReports: intercityReportsRes.items,
+    transporters: transportersRes.items,
+    socialInteractions: socialInteractionsRes.items,
+    socialReplies: socialRepliesRes.items,
+    socialReactions: socialReactionsRes.items,
+    notifications: notificationsRes.items,
+    boardingConfirmations: boardingConfirmationsRes.items,
+    locationAnchors: locationAnchorsRes.items,
     privatePhone,
+    authoritative: {
+      commuters: commutersRes.ok,
+      routes: routesRes.ok,
+      fareReports: fareReportsRes.ok,
+      statusReports: statusReportsRes.ok,
+      intercityReports: intercityReportsRes.ok,
+      transporters: transportersRes.ok,
+      socialInteractions: socialInteractionsRes.ok,
+      socialReplies: socialRepliesRes.ok,
+      socialReactions: socialReactionsRes.ok,
+      notifications: notificationsRes.ok,
+      boardingConfirmations: boardingConfirmationsRes.ok,
+      locationAnchors: locationAnchorsRes.ok,
+    },
   };
 }
 

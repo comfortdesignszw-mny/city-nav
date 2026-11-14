@@ -46,17 +46,17 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
   const handleGlobalSync = async () => {
-    const res = await store.globalSyncNow();
+    const res = await store.globalSyncNow({ force: true, reconcileLocal: true });
     if (res.pulled && !res.error) {
       setSyncNotice(
         res.pushed > 0
-          ? `Global Sync complete: pushed ${res.pushed} & updated from cloud`
-          : 'Global Sync complete: all devices up to date'
+          ? `Global Sync complete: pushed ${res.pushed} item${res.pushed > 1 ? 's' : ''}, queue cleared & synced across all devices`
+          : 'Global Sync complete: queue clean & all devices up to date'
       );
     } else if (res.error) {
       setSyncNotice(res.error);
     }
-    setTimeout(() => setSyncNotice(null), 4000);
+    setTimeout(() => setSyncNotice(null), 4500);
   };
 
   const handleGoogleSignIn = async () => {
@@ -65,8 +65,8 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
       setSyncNotice(res.error);
       setTimeout(() => setSyncNotice(null), 4000);
     } else if (res.user) {
-      setSyncNotice(`Signed in as ${res.user.displayName || res.user.email || 'Commuter'} — syncing data!`);
-      await store.globalSyncNow();
+      setSyncNotice(`Signed in as ${res.user.displayName || res.user.email || 'Commuter'} — syncing all local data!`);
+      await store.globalSyncNow({ force: true, reconcileLocal: true });
       setTimeout(() => setSyncNotice(null), 4000);
     }
   };

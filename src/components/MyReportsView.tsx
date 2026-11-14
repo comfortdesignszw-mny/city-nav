@@ -132,8 +132,8 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
     if (res.error) {
       setGlobalSyncBanner(res.error);
     } else if (res.user) {
-      await store.globalSyncNow();
-      setGlobalSyncBanner(`Cloud account linked: ${res.user.displayName || res.user.email} (Owner RLS Active)`);
+      await store.globalSyncNow({ force: true, reconcileLocal: true });
+      setGlobalSyncBanner(`Cloud account linked: ${res.user.displayName || res.user.email} (All local data synced)`);
     }
     setTimeout(() => setGlobalSyncBanner(null), 4000);
   };
@@ -401,13 +401,13 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={async () => {
-                const res = await store.globalSyncNow();
+                const res = await store.globalSyncNow({ force: true, reconcileLocal: true });
                 setGlobalSyncBanner(
                   res.error
                     ? `Sync notice: ${res.error}`
-                    : `Dual Cloud Sync complete (${res.pushed} queued items pushed & cloud snapshots pulled)`
+                    : `Global Dual Sync complete (${res.pushed} item${res.pushed === 1 ? '' : 's'} pushed, queue cleared & cloud snapshots pulled)`
                 );
-                setTimeout(() => setGlobalSyncBanner(null), 4000);
+                setTimeout(() => setGlobalSyncBanner(null), 4500);
               }}
               disabled={syncStatus.isSyncing}
               className="px-3 py-1.5 bg-[#F27D26] hover:bg-[#d96615] text-white text-xs font-black uppercase tracking-wider transition flex items-center gap-1.5 border-2 border-[#141414] shadow-[2px_2px_0px_0px_#141414] cursor-pointer disabled:opacity-60"
@@ -694,8 +694,13 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                     </span>
                   </div>
                   <p className="text-stone-700 font-mono mt-1 text-[11px]">
-                    Payload ID: {item.payload?.id || item.id}
+                    Payload ID: {item.payload?.id || item.payload?.device_id || item.payload?.deviceId || item.id}
                   </p>
+                  {item.error && (
+                    <p className="text-rose-700 font-bold mt-1 text-[11px] max-w-md break-words">
+                      {item.error}
+                    </p>
+                  )}
                 </div>
 
                 <div>
