@@ -21,6 +21,7 @@ import {
   CommuterSocialInteraction,
   FareReport,
   IntercityReport,
+  IntercityRoute,
   LocationAnchor,
   PendingWrite,
   RouteItem,
@@ -36,6 +37,7 @@ export interface CloudSnapshotData {
   routes: RouteItem[];
   fareReports: FareReport[];
   statusReports: StatusReport[];
+  intercityRoutes: IntercityRoute[];
   intercityReports: IntercityReport[];
   transporters: TransporterProfile[];
   socialInteractions: CommuterSocialInteraction[];
@@ -50,6 +52,7 @@ export interface CloudSnapshotData {
     routes: boolean;
     fareReports: boolean;
     statusReports: boolean;
+    intercityRoutes: boolean;
     intercityReports: boolean;
     transporters: boolean;
     socialInteractions: boolean;
@@ -346,6 +349,30 @@ function sanitizeIntercityForCloud(rep: IntercityReport, uid: string): Record<st
     reporterUsername: nonEmpty(rep.reporterUsername, 40),
     upvotes: Number(rep.upvotes || 0),
     downvotes: Number(rep.downvotes || 0),
+  });
+}
+
+function sanitizeIntercityRouteForCloud(route: IntercityRoute, uid: string): Record<string, any> {
+  const minFare = Math.max(0.5, Number(route.fareRange?.min || route.averageFareUSD || 10));
+  const maxFare = Math.max(minFare, Number(route.fareRange?.max || minFare));
+  const avgFare = Math.max(0.5, Number(route.averageFareUSD || (minFare + maxFare) / 2));
+  return stripUndefined({
+    id: route.id,
+    name: nonEmpty(route.name, 120) || 'Intercity Highway Corridor',
+    originCity: nonEmpty(route.originCity, 60) || 'Harare',
+    destinationCity: nonEmpty(route.destinationCity, 60) || 'Bulawayo',
+    distanceKm: Math.min(10000, Math.max(1, Number(route.distanceKm || 100))),
+    estimatedDurationHours: Math.min(200, Math.max(0.25, Number(route.estimatedDurationHours || 2))),
+    highwayCode: nonEmpty(route.highwayCode, 40) || 'Highway Corridor',
+    keyStops: Array.isArray(route.keyStops) ? route.keyStops.slice(0, 30) : [],
+    departureHubs: Array.isArray(route.departureHubs) ? route.departureHubs.slice(0, 10) : [],
+    operators: Array.isArray(route.operators) ? route.operators.slice(0, 30) : [],
+    averageFareUSD: avgFare,
+    fareRange: { min: minFare, max: maxFare },
+    createdByDeviceId: nonEmpty(route.createdByDeviceId, 128),
+    createdByUsername: nonEmpty(route.createdByUsername, 40),
+    ownerUid: uid,
+    createdAt: Number(route.createdAt || Date.now()),
   });
 }
 
@@ -711,6 +738,21 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
       break;
     }
 
+    case 'add_intercity_route': {
+      const route = payload?.route || payload;
+      const path = `intercity_routes/${route?.id || ''}`;
+      try {
+        if (route?.id) {
+          await setDoc(doc(db, 'intercity_routes', route.id), sanitizeIntercityRouteForCloud(route, uid), {
+            merge: true,
+          });
+        }
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, path);
+      }
+      break;
+    }
+
     case 'intercity_report': {
       const path = `intercity_reports/${payload.id}`;
       try {
@@ -945,6 +987,7 @@ export async function pullAllFromCloud(currentDeviceId?: string): Promise<CloudS
     routesRes,
     fareReportsRes,
     statusReportsRes,
+    intercityRoutesRes,
     intercityReportsRes,
     transportersRes,
     socialInteractionsRes,
@@ -959,6 +1002,7 @@ export async function pullAllFromCloud(currentDeviceId?: string): Promise<CloudS
     fetchCollection<RouteItem>('routes'),
     fetchCollection<FareReport>('fare_reports'),
     fetchCollection<StatusReport>('status_reports'),
+    fetchCollection<IntercityRoute>('intercity_routes'),
     fetchCollection<IntercityReport>('intercity_reports'),
     fetchCollection<TransporterProfile>('transporters'),
     fetchCollection<CommuterSocialInteraction>('social_interactions'),
@@ -975,6 +1019,7 @@ export async function pullAllFromCloud(currentDeviceId?: string): Promise<CloudS
     routes: routesRes.items,
     fareReports: fareReportsRes.items,
     statusReports: statusReportsRes.items,
+    intercityRoutes: intercityRoutesRes.items,
     intercityReports: intercityReportsRes.items,
     transporters: transportersRes.items,
     socialInteractions: socialInteractionsRes.items,
@@ -989,6 +1034,7 @@ export async function pullAllFromCloud(currentDeviceId?: string): Promise<CloudS
       routes: routesRes.ok,
       fareReports: fareReportsRes.ok,
       statusReports: statusReportsRes.ok,
+      intercityRoutes: intercityRoutesRes.ok,
       intercityReports: intercityReportsRes.ok,
       transporters: transportersRes.ok,
       socialInteractions: socialInteractionsRes.ok,
@@ -1053,6 +1099,7 @@ export function subscribeToCloudCollections(
   attach<RouteItem>('routes', 'routes');
   attach<FareReport>('fare_reports', 'fareReports');
   attach<StatusReport>('status_reports', 'statusReports');
+  attach<IntercityRoute>('intercity_routes', 'intercityRoutes');
   attach<IntercityReport>('intercity_reports', 'intercityReports');
   attach<TransporterProfile>('transporters', 'transporters');
   attach<CommuterSocialInteraction>('social_interactions', 'socialInteractions');

@@ -107,6 +107,7 @@ export default function App() {
         {activeTab === 'intercity' && (
           <IntercityTravelView 
             onSelectRoute={handleSelectRoute}
+            onNavigateToBuzz={() => setActiveTab('buzz')}
           />
         )}
 

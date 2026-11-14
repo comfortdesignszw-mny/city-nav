@@ -384,6 +384,15 @@ class FambaiOfflineStore {
     });
     if (icChanged) safeSet(STORAGE_KEYS.INTERCITY_REPORTS, this.intercityReports);
 
+    let icRouteChanged = false;
+    this.intercityRoutes.forEach((r) => {
+      if (r.createdByDeviceId === this.deviceId && !r.ownerUid) {
+        r.ownerUid = uid;
+        icRouteChanged = true;
+      }
+    });
+    if (icRouteChanged) safeSet(STORAGE_KEYS.INTERCITY_ROUTES, this.intercityRoutes);
+
     let transChanged = false;
     this.transporters.forEach((t) => {
       if (t.registeredByDeviceId === this.deviceId && !t.ownerUid) {
@@ -433,6 +442,7 @@ class FambaiOfflineStore {
       updatedAny ||
       statusChanged ||
       icChanged ||
+      icRouteChanged ||
       transChanged ||
       socChanged ||
       repChanged ||
@@ -576,6 +586,9 @@ class FambaiOfflineStore {
     const sqlRoutes = sqliteDb.getAll<RouteItem>('routes');
     if (sqlRoutes.length > 0) this.mergeRoutes(sqlRoutes);
 
+    const sqlIcRoutes = sqliteDb.getAll<IntercityRoute>('intercity_routes');
+    if (sqlIcRoutes.length > 0) this.mergeIntercityRoutes(sqlIcRoutes);
+
     const sqlIc = sqliteDb.getAll<IntercityReport>('intercity_reports');
     if (sqlIc.length > 0) this.mergeIntercityReports(sqlIc);
 
@@ -629,6 +642,7 @@ class FambaiOfflineStore {
     sqliteDb.replaceTable('routes', this.routes);
     sqliteDb.replaceTable('fare_reports', this.fareReports);
     sqliteDb.replaceTable('status_reports', this.statusReports);
+    sqliteDb.replaceTable('intercity_routes', this.intercityRoutes);
     sqliteDb.replaceTable('intercity_reports', this.intercityReports);
     sqliteDb.replaceTable('transporters', this.transporters);
     sqliteDb.replaceTable('social_interactions', this.socialInteractions);
@@ -866,6 +880,24 @@ class FambaiOfflineStore {
     if (sqliteDb.isReady()) sqliteDb.replaceTable('status_reports', this.statusReports);
   }
 
+  private mergeIntercityRoutes(cloudList: IntercityRoute[], authoritative = false): void {
+    const seedIds = new Set(INTERCITY_ROUTES.map((r) => r.id));
+    const pendingIds = this.getPendingCreateIds('add_intercity_route');
+    const map = new Map<string, IntercityRoute>();
+    this.intercityRoutes.forEach((r) => {
+      if (!authoritative || seedIds.has(r.id) || pendingIds.has(r.id)) {
+        map.set(r.id, r);
+      }
+    });
+    cloudList.forEach((r) => {
+      const existing = map.get(r.id);
+      map.set(r.id, existing ? { ...existing, ...r } : r);
+    });
+    this.intercityRoutes = Array.from(map.values());
+    safeSet(STORAGE_KEYS.INTERCITY_ROUTES, this.intercityRoutes);
+    if (sqliteDb.isReady()) sqliteDb.replaceTable('intercity_routes', this.intercityRoutes);
+  }
+
   private mergeIntercityReports(cloudList: IntercityReport[], authoritative = false): void {
     const deletedIds = this.getPendingDeletedIds('intercity_delete');
     const pendingIds = this.getPendingCreateIds('intercity_report');
@@ -1030,6 +1062,9 @@ class FambaiOfflineStore {
     this.mergeRoutes(data.routes, authFlags?.routes);
     this.mergeFareReports(data.fareReports, authFlags?.fareReports);
     this.mergeStatusReports(data.statusReports, authFlags?.statusReports);
+    if (data.intercityRoutes) {
+      this.mergeIntercityRoutes(data.intercityRoutes, authFlags?.intercityRoutes);
+    }
     this.mergeIntercityReports(data.intercityReports, authFlags?.intercityReports);
     this.mergeTransporters(data.transporters, authFlags?.transporters);
     this.mergeSocialInteractions(data.socialInteractions, authFlags?.socialInteractions);
@@ -1069,6 +1104,9 @@ class FambaiOfflineStore {
             break;
           case 'statusReports':
             this.mergeStatusReports(items as StatusReport[], true);
+            break;
+          case 'intercityRoutes':
+            this.mergeIntercityRoutes(items as IntercityRoute[], true);
             break;
           case 'intercityReports':
             this.mergeIntercityReports(items as IntercityReport[], true);
@@ -2082,6 +2120,61 @@ class FambaiOfflineStore {
     return base.map((r) => this.hydrateIntercityVote(r)).sort((a, b) => b.reportedAt - a.reportedAt);
   }
 
+  public addIntercityRoute(data: {
+    name: string;
+    originCity: string;
+    destinationCity: string;
+    highwayCode: string;
+    distanceKm: number;
+    estimatedDurationHours: number;
+    keyStops: string[];
+    departureHubs: { city: string; terminal: string }[];
+    fareMinUSD: number;
+    fareMaxUSD: number;
+  }): IntercityRoute {
+    const now = Date.now();
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
+    const minUSD = Math.max(1, Number(data.fareMinUSD || 10));
+    const maxUSD = Math.max(minUSD, Number(data.fareMaxUSD || minUSD));
+    const avgUSD = Math.round(((minUSD + maxUSD) / 2) * 10) / 10;
+
+    const newRoute: IntercityRoute = {
+      id: 'ic-' + now.toString(36) + '-' + Math.random().toString(36).substring(2, 6),
+      name: data.name.trim(),
+      originCity: data.originCity.trim(),
+      destinationCity: data.destinationCity.trim(),
+      distanceKm: Math.max(1, Number(data.distanceKm || 50)),
+      estimatedDurationHours: Math.max(0.5, Number(data.estimatedDurationHours || 1.5)),
+      highwayCode: data.highwayCode.trim() || 'Highway Corridor',
+      keyStops: data.keyStops.map((s) => s.trim()).filter(Boolean).slice(0, 30),
+      departureHubs: data.departureHubs
+        .map((h) => ({ city: h.city.trim(), terminal: h.terminal.trim() }))
+        .filter((h) => h.city && h.terminal)
+        .slice(0, 10),
+      operators: [],
+      averageFareUSD: avgUSD,
+      fareRange: { min: minUSD, max: maxUSD },
+      createdByDeviceId: this.deviceId,
+      createdByUsername: this.getUsername(),
+      ownerUid: uid,
+      createdAt: now,
+    };
+
+    this.intercityRoutes = [newRoute, ...this.intercityRoutes];
+    safeSet(STORAGE_KEYS.INTERCITY_ROUTES, this.intercityRoutes);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('intercity_routes', newRoute.id, newRoute, now);
+    }
+
+    this.userProfile.reports_count += 1;
+    this.userProfile.reputation_score += 15;
+    this.syncProfileToOutbox(false);
+
+    this.enqueueWrite('add_intercity_route', newRoute, true);
+    this.notifyChange();
+    return newRoute;
+  }
+
   public addIntercityReport(data: {
     routeId: string;
     operatorId: string;
@@ -2139,6 +2232,96 @@ class FambaiOfflineStore {
     const rep = this.intercityReports.find((r) => r.id === reportId);
     if (!rep) return;
     this.toggleReactionRecord('intercity', reportId, direction);
+  }
+
+  public getIntercityReactionSummary(targetId: string): {
+    likes: number;
+    dislikes: number;
+    myReaction?: 'up' | 'down' | 'like' | 'dislike';
+  } {
+    const summary = this.computeReactionSummary('intercity', targetId, 0, 0);
+    return {
+      likes: summary.upOrLikeCount,
+      dislikes: summary.downOrDislikeCount,
+      myReaction: summary.myReaction,
+    };
+  }
+
+  public toggleIntercityLike(targetId: string): void {
+    if (!targetId) return;
+    this.toggleReactionRecord('intercity', targetId, 'like');
+  }
+
+  public confirmIntercityBoarding(data: {
+    targetId: string;
+    targetName: string;
+    city?: string;
+  }): {
+    success: boolean;
+    confirmation?: BoardingConfirmation;
+    alreadyBoarded?: boolean;
+  } {
+    const cleanId = data.targetId.replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 128);
+    if (cleanId.length < 2) return { success: false };
+
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    const recentSame = this.boardingConfirmations.find(
+      (b) => b.rankId === cleanId && b.deviceId === this.deviceId && b.createdAt > oneHourAgo
+    );
+    if (recentSame) {
+      return { success: true, confirmation: recentSame, alreadyBoarded: true };
+    }
+
+    const now = Date.now();
+    const uid = this.currentAuthUid || auth.currentUser?.uid || this.userProfile.ownerUid;
+    const confirmation: BoardingConfirmation = {
+      id: `brd-${now.toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+      rankId: cleanId,
+      rankName: data.targetName.trim().slice(0, 120) || 'Intercity Coach Trip',
+      city: (data.city || 'Zimbabwe').trim().slice(0, 60) || 'Zimbabwe',
+      deviceId: this.deviceId,
+      ownerUid: uid,
+      username: this.getUsername(),
+      userHandle: this.getUserHandle(),
+      statement: 'I board this Coach/Trip',
+      lat: this.userLocation.lat,
+      lng: this.userLocation.lng,
+      locationSource: this.userLocation.source,
+      createdAt: now,
+    };
+
+    this.boardingConfirmations = [confirmation, ...this.boardingConfirmations];
+    safeSet(STORAGE_KEYS.BOARDING_CONFIRMATIONS, this.boardingConfirmations);
+    if (sqliteDb.isReady()) {
+      sqliteDb.upsertRecord('boarding_confirmations', confirmation.id, confirmation, now);
+    }
+
+    this.userProfile.reports_count += 1;
+    this.userProfile.reputation_score += 5;
+    this.syncProfileToOutbox(false);
+
+    this.enqueueWrite('boarding_confirmation', confirmation, true);
+    this.notifyChange();
+    return { success: true, confirmation, alreadyBoarded: false };
+  }
+
+  public getIntercityBoardingCount(targetId: string): number {
+    const cleanId = targetId.replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 128);
+    const uniqueDevices = new Set<string>();
+    for (const b of this.boardingConfirmations) {
+      if (b.rankId === cleanId) {
+        uniqueDevices.add(b.deviceId);
+      }
+    }
+    return uniqueDevices.size;
+  }
+
+  public hasUserBoardedIntercityRecently(targetId: string): boolean {
+    const cleanId = targetId.replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 128);
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    return this.boardingConfirmations.some(
+      (b) => b.rankId === cleanId && b.deviceId === this.deviceId && b.createdAt > oneHourAgo
+    );
   }
 
   public deleteIntercityReport(reportId: string): boolean {
@@ -3072,6 +3255,15 @@ class FambaiOfflineStore {
       for (const s of this.statusReports) {
         if (this.isOwnerOf(s.ownerUid, s.reporter_device_id)) {
           queueIfMissing('status_report', s.id, s, cloudStatuses, delStatuses);
+        }
+      }
+    }
+
+    if (snapshot.authoritative.intercityRoutes) {
+      const cloudIcRoutes = new Set(snapshot.intercityRoutes.map((r) => r.id));
+      for (const r of this.intercityRoutes) {
+        if (r.createdByDeviceId === this.deviceId || (r.ownerUid && r.ownerUid === uid)) {
+          queueIfMissing('add_intercity_route', r.id, r, cloudIcRoutes);
         }
       }
     }

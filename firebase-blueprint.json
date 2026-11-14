@@ -148,6 +148,30 @@
       },
       "required": ["id", "routeId", "operatorId", "operatorName", "farePaidUSD", "departureTerminal", "seatAvailability", "busConditionRating", "reportedAt", "reporterDeviceId", "ownerUid", "upvotes", "downvotes"]
     },
+    "IntercityRoute": {
+      "title": "IntercityRoute",
+      "description": "Crowdsourced Zimbabwe intercity highway corridor with stops, hubs, and fare ranges.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "originCity": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "destinationCity": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "distanceKm": { "type": "number" },
+        "estimatedDurationHours": { "type": "number" },
+        "highwayCode": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "keyStops": { "type": "array" },
+        "departureHubs": { "type": "array" },
+        "operators": { "type": "array" },
+        "averageFareUSD": { "type": "number" },
+        "fareRange": { "type": "object" },
+        "createdByDeviceId": { "type": "string", "maxLength": 128 },
+        "createdByUsername": { "type": "string", "maxLength": 40 },
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "name", "originCity", "destinationCity", "distanceKm", "estimatedDurationHours", "highwayCode", "keyStops", "departureHubs", "operators", "averageFareUSD", "fareRange", "ownerUid", "createdAt"]
+    },
     "TransporterProfile": {
       "title": "TransporterProfile",
       "description": "Registered kombi, sprinter, mushikashika, or coach operator and fleet details.",
@@ -338,6 +362,10 @@
     "/status_reports/{statusId}": {
       "schema": { "$ref": "#/entities/StatusReport" },
       "description": "Live road conditions, queues, and police blitz alerts (owner-only CRUD)."
+    },
+    "/intercity_routes/{routeId}": {
+      "schema": { "$ref": "#/entities/IntercityRoute" },
+      "description": "Crowdsourced intercity highway corridors and boarding hubs (owner-only CRUD)."
     },
     "/intercity_reports/{reportId}": {
       "schema": { "$ref": "#/entities/IntercityReport" },

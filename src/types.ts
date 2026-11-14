@@ -341,6 +341,10 @@ export interface IntercityRoute {
   operators: IntercityOperatorService[];
   averageFareUSD: number;
   fareRange: { min: number; max: number };
+  createdByDeviceId?: string;
+  createdByUsername?: string;
+  ownerUid?: string;
+  createdAt?: number;
 }
 
 export interface IntercityReport {
@@ -374,6 +378,7 @@ export type PendingWriteType =
   | 'intercity_report'
   | 'intercity_delete'
   | 'intercity_vote'
+  | 'add_intercity_route'
   | 'add_route'
   | 'transporter_register'
   | 'transporter_update'

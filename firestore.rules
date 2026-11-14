@@ -185,6 +185,30 @@ service cloud.firestore {
         && data.downvotes is number && data.downvotes >= 0 && data.downvotes <= 1000000;
     }
 
+    function isValidIntercityRoute(data) {
+      return data.keys().hasAll(['id', 'name', 'originCity', 'destinationCity', 'distanceKm', 'estimatedDurationHours', 'highwayCode', 'keyStops', 'departureHubs', 'operators', 'averageFareUSD', 'fareRange', 'ownerUid', 'createdAt'])
+        && data.keys().hasOnly(['id', 'name', 'originCity', 'destinationCity', 'distanceKm', 'estimatedDurationHours', 'highwayCode', 'keyStops', 'departureHubs', 'operators', 'averageFareUSD', 'fareRange', 'createdByDeviceId', 'createdByUsername', 'ownerUid', 'createdAt'])
+        && isValidId(data.id)
+        && isStrLen(data.name, 2, 120)
+        && isStrLen(data.originCity, 1, 60)
+        && isStrLen(data.destinationCity, 1, 60)
+        && data.distanceKm is number && data.distanceKm >= 1 && data.distanceKm <= 10000
+        && data.estimatedDurationHours is number && data.estimatedDurationHours >= 0.25 && data.estimatedDurationHours <= 200
+        && isStrLen(data.highwayCode, 1, 40)
+        && data.keyStops is list && data.keyStops.size() <= 30
+        && data.departureHubs is list && data.departureHubs.size() <= 10
+        && data.operators is list && data.operators.size() <= 30
+        && data.averageFareUSD is number && data.averageFareUSD > 0 && data.averageFareUSD <= 5000
+        && data.fareRange is map
+        && data.fareRange.keys().hasAll(['min', 'max'])
+        && data.fareRange.min is number && data.fareRange.min > 0 && data.fareRange.min <= 5000
+        && data.fareRange.max is number && data.fareRange.max >= data.fareRange.min && data.fareRange.max <= 5000
+        && (!('createdByDeviceId' in data) || isStrLen(data.createdByDeviceId, 2, 128))
+        && (!('createdByUsername' in data) || isStrLen(data.createdByUsername, 1, 40))
+        && isStrLen(data.ownerUid, 3, 128)
+        && data.createdAt is number && data.createdAt > 0;
+    }
+
     function isValidTransporter(data) {
       return data.keys().hasAll(['id', 'operatorName', 'contactPhone', 'transportType', 'transportTypeLabel', 'currentRouteName', 'city', 'status', 'registeredAt', 'lastRouteUpdate', 'registeredByDeviceId', 'ownerUid', 'likes'])
         && data.keys().hasOnly(['id', 'operatorName', 'contactPhone', 'transportType', 'transportTypeLabel', 'currentRouteName', 'currentRouteId', 'city', 'vehiclePlate', 'baseTerminus', 'status', 'statusNote', 'registeredAt', 'lastRouteUpdate', 'registeredByDeviceId', 'ownerUid', 'username', 'userHandle', 'likes'])
@@ -413,6 +437,19 @@ service cloud.firestore {
         && incoming().ownerUid == existing().ownerUid
         && incoming().reporter_device_id == existing().reporter_device_id
         && incoming().reported_at == existing().reported_at;
+      allow delete: if isOwner(existing().ownerUid);
+    }
+
+    // Crowdsourced intercity highway corridors (read-only to peers; strict owner-only CRUD)
+    match /intercity_routes/{routeId} {
+      allow get: if isValidId(routeId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(routeId) && isValidIntercityRoute(incoming())
+        && incoming().id == routeId && incoming().ownerUid == request.auth.uid;
+      allow update: if isOwner(existing().ownerUid) && isValidIntercityRoute(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt;
       allow delete: if isOwner(existing().ownerUid);
     }
 

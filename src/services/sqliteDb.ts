@@ -87,6 +87,7 @@ export type SqliteTableName =
   | 'routes'
   | 'fare_reports'
   | 'status_reports'
+  | 'intercity_routes'
   | 'intercity_reports'
   | 'transporters'
   | 'social_interactions'
@@ -103,6 +104,7 @@ const ALL_TABLES: SqliteTableName[] = [
   'routes',
   'fare_reports',
   'status_reports',
+  'intercity_routes',
   'intercity_reports',
   'transporters',
   'social_interactions',
