@@ -28,7 +28,7 @@ import { useOfflineStore } from '../hooks/useOfflineStore';
 import { formatTimeAgo, formatCurrency, formatDisplayFare, getStatusConfig } from '../utils/formatters';
 import { PWAInstallButton } from './PWAInstallButton';
 import { AddRouteFareModal } from './AddRouteFareModal';
-import { generateGuestUsername, signInWithGoogle } from '../services/firebase';
+import { generateGuestUsername } from '../services/firebase';
 
 interface MyReportsViewProps {
   onSelectRoute: (routeId: string) => void;
@@ -152,14 +152,17 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
   };
 
   const handleGoogleSignIn = async () => {
-    const res = await signInWithGoogle();
+    const res = await store.loginWithGoogle();
     if (res.error) {
       setGlobalSyncBanner(res.error);
     } else if (res.user) {
-      await store.globalSyncNow({ force: true, reconcileLocal: true });
-      setGlobalSyncBanner(`Cloud account linked: ${res.user.displayName || res.user.email} (All local data synced)`);
+      setGlobalSyncBanner(
+        res.isReturning
+          ? `Welcome back, ${res.username || res.user.displayName || 'Commuter'}! Found existing account for ${res.email} — signed in as returning user (profile & submissions restored).`
+          : `Google account registered for ${res.email || res.username} (All local data synced).`
+      );
     }
-    setTimeout(() => setGlobalSyncBanner(null), 4000);
+    setTimeout(() => setGlobalSyncBanner(null), 5000);
   };
 
   const handleContinueAsGuest = async (regenerate = false) => {
@@ -309,6 +312,13 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
           <div className="mb-4 p-3 bg-emerald-50 border-2 border-emerald-600 text-xs font-bold text-emerald-950 flex items-center gap-2">
             <Check className="w-4 h-4 text-emerald-600" />
             <span>Profile saved locally in SQLite! Phone number is protected in owner-only private storage.</span>
+          </div>
+        )}
+
+        {globalSyncBanner && (
+          <div className="mb-4 p-3 bg-emerald-50 border-2 border-[#141414] text-xs font-bold text-emerald-950 flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{globalSyncBanner}</span>
           </div>
         )}
 

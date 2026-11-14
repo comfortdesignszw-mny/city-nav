@@ -1,8 +1,10 @@
+import { User } from 'firebase/auth';
 import {
   collection,
   deleteDoc,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   getDocsFromServer,
   onSnapshot,
@@ -78,23 +80,194 @@ function nonEmpty(val: string | undefined | null, maxLen: number): string | unde
 
 function sanitizeCommuterForCloud(profile: UserProfile, uid: string): Record<string, any> {
   const isAnon = auth.currentUser ? !!auth.currentUser.isAnonymous : profile.isGuest ?? true;
+  const rawUserId = nonEmpty(profile.userId, 128);
+  const safeUserId = rawUserId && rawUserId.length >= 3 ? rawUserId : uid;
+  const cleanName =
+    typeof profile.name === 'string' && profile.name.trim().length > 0
+      ? profile.name.trim().slice(0, 60)
+      : undefined;
+  const rawAvatar = nonEmpty(profile.avatarColor, 20);
+  const safeAvatar = rawAvatar && rawAvatar.length >= 3 ? rawAvatar : '#F27D26';
+  const rawRep = Number(profile.reputation_score);
+  const rawReports = Number(profile.reports_count);
+  const rawCreated = Number(profile.createdAt);
+  const rawUpdated = Number(profile.updatedAt);
+
   return stripUndefined({
     device_id: profile.device_id,
-    userId: (profile.userId || uid).slice(0, 128),
+    userId: safeUserId.slice(0, 128),
     ownerUid: uid,
     username: nonEmpty(profile.username, 40) || 'guest_User1',
     handle: nonEmpty(profile.handle, 45) || '@guest_user1',
-    name: profile.name !== undefined ? profile.name.slice(0, 60) : undefined,
-    avatarColor: nonEmpty(profile.avatarColor, 20) || '#F27D26',
+    name: cleanName,
+    avatarColor: safeAvatar,
     commuterBadge: nonEmpty(profile.commuterBadge, 60) || 'Daily Commuter',
     role: profile.role === 'transporter' ? 'transporter' : 'commuter',
     isGuest: typeof profile.isGuest === 'boolean' ? profile.isGuest : isAnon,
     authProvider: profile.authProvider || (isAnon ? 'anonymous' : 'google'),
-    reputation_score: Number(profile.reputation_score || 0),
-    reports_count: Number(profile.reports_count || 0),
-    createdAt: Number(profile.createdAt || Date.now()),
-    updatedAt: Number(profile.updatedAt || Date.now()),
+    reputation_score: Number.isFinite(rawRep) ? Math.min(1000000, Math.max(0, rawRep)) : 100,
+    reports_count: Number.isFinite(rawReports) ? Math.min(1000000, Math.max(0, rawReports)) : 0,
+    createdAt: Number.isFinite(rawCreated) && rawCreated > 0 ? rawCreated : Date.now(),
+    updatedAt: Number.isFinite(rawUpdated) && rawUpdated > 0 ? rawUpdated : Date.now(),
   });
+}
+
+export interface ReturningAccountRecord {
+  ownerUid: string;
+  email: string;
+  primaryDeviceId: string;
+  username: string;
+  handle: string;
+  name?: string;
+  avatarColor: string;
+  commuterBadge: string;
+  role: 'commuter' | 'transporter';
+  reputation_score: number;
+  reports_count: number;
+  createdAt: number;
+  updatedAt: number;
+  lastLoginAt: number;
+}
+
+function sanitizeAccountForCloud(
+  account: ReturningAccountRecord
+): Record<string, any> {
+  return stripUndefined({
+    ownerUid: account.ownerUid.slice(0, 128),
+    email: account.email.slice(0, 160),
+    primaryDeviceId: account.primaryDeviceId.slice(0, 128),
+    username: nonEmpty(account.username, 40) || 'Commuter',
+    handle: nonEmpty(account.handle, 45) || '@commuter',
+    name: account.name !== undefined ? account.name.slice(0, 60) : undefined,
+    avatarColor: nonEmpty(account.avatarColor, 20) || '#F27D26',
+    commuterBadge: nonEmpty(account.commuterBadge, 60) || 'Daily Commuter',
+    role: account.role === 'transporter' ? 'transporter' : 'commuter',
+    reputation_score: Number(account.reputation_score || 0),
+    reports_count: Number(account.reports_count || 0),
+    createdAt: Number(account.createdAt || Date.now()),
+    updatedAt: Number(account.updatedAt || Date.now()),
+    lastLoginAt: Number(account.lastLoginAt || Date.now()),
+  });
+}
+
+export async function lookupOrRegisterGoogleAccount(
+  user: User,
+  fallbackProfile: UserProfile
+): Promise<{ isReturning: boolean; account: ReturningAccountRecord | null }> {
+  if (
+    !user ||
+    user.isAnonymous ||
+    !user.email ||
+    !user.emailVerified ||
+    (typeof navigator !== 'undefined' && !navigator.onLine)
+  ) {
+    return { isReturning: false, account: null };
+  }
+
+  const uid = user.uid;
+  const email = user.email;
+  const now = Date.now();
+  const accountRef = doc(db, 'accounts', uid);
+
+  try {
+    let existing: ReturningAccountRecord | null = null;
+
+    // 1. Direct lookup by UID
+    try {
+      const serverSnap = await getDocFromServer(accountRef);
+      if (serverSnap.exists()) {
+        existing = serverSnap.data() as ReturningAccountRecord;
+      }
+    } catch {
+      const cachedSnap = await getDoc(accountRef);
+      if (cachedSnap.exists()) {
+        existing = cachedSnap.data() as ReturningAccountRecord;
+      }
+    }
+
+    // 2. Explicit email lookup in /accounts to confirm returning email in system
+    if (!existing) {
+      try {
+        const emailQuery = query(
+          collection(db, 'accounts'),
+          where('email', '==', email),
+          where('ownerUid', '==', uid)
+        );
+        const qSnap = await getDocsFromServer(emailQuery);
+        if (!qSnap.empty) {
+          existing = qSnap.docs[0].data() as ReturningAccountRecord;
+        }
+      } catch {
+        // Ignore query error and proceed to legacy commuter check
+      }
+    }
+
+    if (existing) {
+      const updatedAccount: ReturningAccountRecord = {
+        ...existing,
+        ownerUid: uid,
+        email,
+        lastLoginAt: now,
+        updatedAt: Math.max(existing.updatedAt || 0, now),
+      };
+      await updateDoc(accountRef, {
+        lastLoginAt: now,
+        updatedAt: updatedAccount.updatedAt,
+      });
+      return { isReturning: true, account: updatedAccount };
+    }
+
+    // 3. Fallback check for pre-existing Google commuter profile owned by this UID
+    let legacyCommuter: UserProfile | null = null;
+    try {
+      const commuterSnap = await getDocsFromServer(
+        query(collection(db, 'commuters'), where('ownerUid', '==', uid))
+      );
+      if (!commuterSnap.empty) {
+        legacyCommuter = commuterSnap.docs[0].data() as UserProfile;
+      }
+    } catch {
+      // Ignore legacy commuter lookup errors
+    }
+
+    const baseName =
+      legacyCommuter?.name ||
+      fallbackProfile.name ||
+      user.displayName ||
+      undefined;
+    const baseUsername =
+      legacyCommuter?.username ||
+      nonEmpty(fallbackProfile.username, 40) ||
+      (user.displayName
+        ? user.displayName.trim().replace(/\s+/g, '_').slice(0, 32)
+        : email.split('@')[0].slice(0, 32));
+    const baseHandle =
+      legacyCommuter?.handle ||
+      nonEmpty(fallbackProfile.handle, 45) ||
+      `@${baseUsername.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
+
+    const newAccount: ReturningAccountRecord = {
+      ownerUid: uid,
+      email,
+      primaryDeviceId: legacyCommuter?.device_id || fallbackProfile.device_id || uid,
+      username: baseUsername,
+      handle: baseHandle,
+      name: baseName,
+      avatarColor: legacyCommuter?.avatarColor || fallbackProfile.avatarColor || '#F27D26',
+      commuterBadge: legacyCommuter?.commuterBadge || fallbackProfile.commuterBadge || 'Daily Commuter',
+      role: (legacyCommuter?.role || fallbackProfile.role) === 'transporter' ? 'transporter' : 'commuter',
+      reputation_score: Math.max(legacyCommuter?.reputation_score || 0, fallbackProfile.reputation_score || 100),
+      reports_count: Math.max(legacyCommuter?.reports_count || 0, fallbackProfile.reports_count || 0),
+      createdAt: legacyCommuter?.createdAt || fallbackProfile.createdAt || now,
+      updatedAt: now,
+      lastLoginAt: now,
+    };
+
+    await setDoc(accountRef, sanitizeAccountForCloud(newAccount));
+    return { isReturning: !!legacyCommuter, account: newAccount };
+  } catch (err) {
+    handleFirestoreError(err, OperationType.GET, `accounts/${uid}`);
+  }
 }
 
 function sanitizeRouteForCloud(route: RouteItem, uid: string): Record<string, any> {
@@ -309,6 +482,7 @@ function sanitizeBoardingForCloud(b: BoardingConfirmation, uid: string): Record<
 }
 
 function sanitizeLocationAnchorForCloud(anchor: LocationAnchor, uid: string): Record<string, any> {
+  const rawAcc = Number(anchor.accuracyMeters);
   return stripUndefined({
     deviceId: anchor.deviceId,
     ownerUid: uid,
@@ -317,11 +491,22 @@ function sanitizeLocationAnchorForCloud(anchor: LocationAnchor, uid: string): Re
     lng: Number(anchor.lng),
     name: nonEmpty(anchor.name, 120) || 'Current Location',
     source: anchor.source,
-    accuracyMeters: typeof anchor.accuracyMeters === 'number' ? anchor.accuracyMeters : undefined,
+    accuracyMeters:
+      typeof anchor.accuracyMeters === 'number' && Number.isFinite(rawAcc) && rawAcc >= 0
+        ? rawAcc
+        : undefined,
     nearestRankId: nonEmpty(anchor.nearestRankId, 128),
     nearestRankName: nonEmpty(anchor.nearestRankName, 120),
-    timestamp: Number(anchor.timestamp),
+    timestamp: Number(anchor.timestamp) > 0 ? Number(anchor.timestamp) : Date.now(),
   });
+}
+
+async function getDocServerOrCache(ref: ReturnType<typeof doc>) {
+  try {
+    return await getDocFromServer(ref);
+  } catch {
+    return await getDoc(ref);
+  }
 }
 
 async function safeDeleteCloudDoc(collectionName: string, docId: string, uid: string): Promise<void> {
@@ -375,35 +560,79 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
 
   switch (type) {
     case 'profile_update': {
-      const targetDocId = payload.device_id;
-      const path = `commuters/${targetDocId}`;
+      const targetDocId = payload.device_id || uid;
+      let resolvedDocId = targetDocId;
+      let path = `commuters/${targetDocId}`;
       try {
         const ref = doc(db, 'commuters', targetDocId);
-        const existingSnap = await getDoc(ref);
-        if (existingSnap.exists()) {
-          const existingData = existingSnap.data() as { ownerUid?: string };
-          if (existingData?.ownerUid && existingData.ownerUid !== uid) {
-            // Device ID slot belongs to a prior UID; store under uid-scoped doc so profile stays synced
-            await setDoc(
-              doc(db, 'commuters', uid),
-              sanitizeCommuterForCloud({ ...payload, device_id: uid }, uid),
-              { merge: true }
-            );
-            break;
+        let activeSnap = await getDocServerOrCache(ref);
+
+        if (activeSnap.exists()) {
+          const existingData = activeSnap.data() as { ownerUid?: string } | undefined;
+          if (existingData?.ownerUid !== uid) {
+            // Device ID slot belongs to a different or legacy UID; store under uid-scoped doc cleanly
+            resolvedDocId = uid;
+            path = `commuters/${uid}`;
+            activeSnap = await getDocServerOrCache(doc(db, 'commuters', uid));
           }
         }
-        await setDoc(ref, sanitizeCommuterForCloud(payload, uid), { merge: true });
+
+        const sanitized = sanitizeCommuterForCloud({ ...payload, device_id: resolvedDocId }, uid);
+        if (activeSnap.exists()) {
+          const activeData = activeSnap.data() as {
+            ownerUid?: string;
+            device_id?: string;
+            createdAt?: number;
+          };
+          if (activeData?.ownerUid === uid) {
+            if (typeof activeData.createdAt === 'number' && activeData.createdAt > 0) {
+              sanitized.createdAt = activeData.createdAt;
+            }
+            if (activeData.device_id) {
+              sanitized.device_id = activeData.device_id;
+            }
+          }
+        }
+
+        await setDoc(doc(db, 'commuters', resolvedDocId), sanitized);
+
+        if (!user.isAnonymous && user.email && user.emailVerified) {
+          const accRef = doc(db, 'accounts', uid);
+          const accSnap = await getDoc(accRef);
+          if (accSnap.exists()) {
+            const existingAcc = accSnap.data() as ReturningAccountRecord;
+            await updateDoc(
+              accRef,
+              stripUndefined({
+                primaryDeviceId: resolvedDocId,
+                username: nonEmpty(payload.username, 40) || existingAcc.username,
+                handle: nonEmpty(payload.handle, 45) || existingAcc.handle,
+                name: payload.name !== undefined ? String(payload.name || '').slice(0, 60) : existingAcc.name,
+                avatarColor: nonEmpty(payload.avatarColor, 20) || existingAcc.avatarColor,
+                commuterBadge: nonEmpty(payload.commuterBadge, 60) || existingAcc.commuterBadge,
+                role: payload.role === 'transporter' ? 'transporter' : 'commuter',
+                reputation_score: Number(payload.reputation_score ?? existingAcc.reputation_score ?? 0),
+                reports_count: Number(payload.reports_count ?? existingAcc.reports_count ?? 0),
+                updatedAt: Number(payload.updatedAt || Date.now()),
+                lastLoginAt: Date.now(),
+              })
+            );
+          }
+        }
         if (payload.phone !== undefined) {
-          await setDoc(
-            doc(db, 'commuters', targetDocId, 'private', 'contact'),
-            stripUndefined({
-              device_id: targetDocId,
+          const privRef = doc(db, 'commuters', resolvedDocId, 'private', 'contact');
+          const privSnap = await getDocServerOrCache(privRef);
+          const privOwner = privSnap.exists()
+            ? (privSnap.data() as { ownerUid?: string } | undefined)?.ownerUid
+            : uid;
+          if (!privSnap.exists() || privOwner === uid) {
+            await setDoc(privRef, {
+              device_id: resolvedDocId,
               ownerUid: uid,
               phone: String(payload.phone || '').slice(0, 40),
               updatedAt: Number(payload.updatedAt || Date.now()),
-            }),
-            { merge: true }
-          );
+            });
+          }
         }
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, path);
@@ -412,19 +641,22 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     }
 
     case 'private_profile_update': {
-      const path = `commuters/${payload.device_id}/private/contact`;
+      const targetDocId = payload.device_id || uid;
+      let resolvedDocId = targetDocId;
+      let path = `commuters/${targetDocId}/private/contact`;
       try {
-        const ref = doc(db, 'commuters', payload.device_id, 'private', 'contact');
-        await setDoc(
-          ref,
-          stripUndefined({
-            device_id: payload.device_id,
-            ownerUid: uid,
-            phone: String(payload.phone || '').slice(0, 40),
-            updatedAt: Number(payload.updatedAt || Date.now()),
-          }),
-          { merge: true }
-        );
+        const parentSnap = await getDocServerOrCache(doc(db, 'commuters', targetDocId));
+        if (parentSnap.exists() && (parentSnap.data() as { ownerUid?: string })?.ownerUid !== uid) {
+          resolvedDocId = uid;
+          path = `commuters/${uid}/private/contact`;
+        }
+        const ref = doc(db, 'commuters', resolvedDocId, 'private', 'contact');
+        await setDoc(ref, {
+          device_id: resolvedDocId,
+          ownerUid: uid,
+          phone: String(payload.phone || '').slice(0, 40),
+          updatedAt: Number(payload.updatedAt) > 0 ? Number(payload.updatedAt) : Date.now(),
+        });
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, path);
       }
@@ -627,22 +859,23 @@ export async function pushPendingWriteToCloud(item: PendingWrite): Promise<void>
     }
 
     case 'location_anchor': {
-      const path = `location_anchors/${payload.deviceId}`;
+      const targetAnchorId = payload.deviceId || uid;
+      let resolvedAnchorId = targetAnchorId;
+      let path = `location_anchors/${targetAnchorId}`;
       try {
-        const ref = doc(db, 'location_anchors', payload.deviceId);
-        const existingSnap = await getDoc(ref);
+        const ref = doc(db, 'location_anchors', targetAnchorId);
+        const existingSnap = await getDocServerOrCache(ref);
         if (existingSnap.exists()) {
-          const existingData = existingSnap.data() as { ownerUid?: string };
-          if (existingData?.ownerUid && existingData.ownerUid !== uid) {
-            await setDoc(
-              doc(db, 'location_anchors', uid),
-              sanitizeLocationAnchorForCloud({ ...payload, deviceId: uid }, uid),
-              { merge: true }
-            );
-            break;
+          const existingData = existingSnap.data() as { ownerUid?: string } | undefined;
+          if (existingData?.ownerUid !== uid) {
+            resolvedAnchorId = uid;
+            path = `location_anchors/${uid}`;
           }
         }
-        await setDoc(ref, sanitizeLocationAnchorForCloud(payload, uid), { merge: true });
+        await setDoc(
+          doc(db, 'location_anchors', resolvedAnchorId),
+          sanitizeLocationAnchorForCloud({ ...payload, deviceId: resolvedAnchorId }, uid)
+        );
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, path);
       }

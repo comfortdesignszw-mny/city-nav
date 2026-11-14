@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { CloudUpload, LogIn, RefreshCw, UserCheck } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
-import { signInWithGoogle } from '../services/firebase';
 
 export const OfflineIndicator: React.FC = () => {
   const store = useOfflineStore();
@@ -36,11 +35,12 @@ export const OfflineIndicator: React.FC = () => {
     setAuthLoading('google');
     setAuthNotice(null);
     try {
-      const res = await signInWithGoogle();
-      if (res.user) {
-        await store.globalSyncNow({ force: true, reconcileLocal: true });
-      } else if (res.error) {
+      const res = await store.loginWithGoogle();
+      if (res.error) {
         setAuthNotice(res.error);
+      } else if (res.isReturning && res.email) {
+        setAuthNotice(`Welcome back! Existing account (${res.email}) restored.`);
+        setTimeout(() => setAuthNotice(null), 4000);
       }
     } finally {
       setAuthLoading(null);

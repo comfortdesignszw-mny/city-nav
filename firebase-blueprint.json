@@ -23,6 +23,28 @@
       },
       "required": ["device_id", "userId", "ownerUid", "username", "handle", "avatarColor", "commuterBadge", "role", "reputation_score", "reports_count", "createdAt", "updatedAt"]
     },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Owner-only Google account registry indexed by verified email and ownerUid so returning users sign back into their existing account without creating duplicate accounts.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "primaryDeviceId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "username": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "handle": { "type": "string", "minLength": 1, "maxLength": 45 },
+        "name": { "type": "string", "maxLength": 60 },
+        "avatarColor": { "type": "string", "minLength": 3, "maxLength": 20 },
+        "commuterBadge": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "role": { "type": "string", "enum": ["commuter", "transporter"] },
+        "reputation_score": { "type": "number" },
+        "reports_count": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" },
+        "lastLoginAt": { "type": "number" }
+      },
+      "required": ["ownerUid", "email", "primaryDeviceId", "username", "handle", "avatarColor", "commuterBadge", "role", "reputation_score", "reports_count", "createdAt", "updatedAt", "lastLoginAt"]
+    },
     "CommuterPrivateContact": {
       "title": "CommuterPrivateContact",
       "description": "Owner-only PII document holding commuter phone number.",
@@ -293,6 +315,10 @@
     }
   },
   "firestore": {
+    "/accounts/{accountId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Owner-only verified email account lookup preventing duplicate accounts for returning Google users."
+    },
     "/commuters/{deviceId}": {
       "schema": { "$ref": "#/entities/CommuterProfile" },
       "description": "Public device-linked commuter identities and reputation (owner-only mutation)."

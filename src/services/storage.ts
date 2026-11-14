@@ -56,13 +56,17 @@ import {
   getCurrentAuthStatus,
   getOrCreateGuestUsername,
   saveGuestUsername,
+  signInWithGoogle,
   signOutCloud,
   subscribeAuthState,
   syncFirebaseDisplayName,
 } from './firebase';
+import type { User } from 'firebase/auth';
 import {
   CloudSnapshotData,
+  ReturningAccountRecord,
   deletePersonalCloudProfile,
+  lookupOrRegisterGoogleAccount,
   pullAllFromCloud,
   pushPendingWriteToCloud,
   subscribeToCloudCollections,
@@ -166,6 +170,15 @@ class FambaiOfflineStore {
   private cloudUnsubscribe: (() => void) | null = null;
   private activeSubscribedUid: string | null = null;
   private isExplicitlyLoggedOut: boolean = false;
+  private accountLookupInFlight: Map<
+    string,
+    Promise<{ isReturning: boolean; account: ReturningAccountRecord | null }>
+  > = new Map();
+  private lastGoogleResolve: {
+    uid: string;
+    result: { isReturning: boolean; account: ReturningAccountRecord | null };
+    at: number;
+  } | null = null;
 
   constructor() {
     this.deviceId = getOrCreateDeviceId();
@@ -243,6 +256,18 @@ class FambaiOfflineStore {
               ? existingProfile.isGuest
               : existingProfile.authProvider !== 'google',
           authProvider: existingProfile.authProvider || 'anonymous',
+          reputation_score:
+            typeof existingProfile.reputation_score === 'number'
+              ? existingProfile.reputation_score
+              : 100,
+          reports_count:
+            typeof existingProfile.reports_count === 'number'
+              ? existingProfile.reports_count
+              : 0,
+          createdAt:
+            existingProfile.createdAt && existingProfile.createdAt > 0
+              ? existingProfile.createdAt
+              : Date.now(),
           updatedAt: existingProfile.updatedAt || Date.now(),
         };
         safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
@@ -450,56 +475,64 @@ class FambaiOfflineStore {
           // Ignore storage error
         }
         this.backfillLocalOwnerUid(uid);
-        const nextIsGuest = !!user.isAnonymous;
-        const nextProvider: 'anonymous' | 'google' = user.isAnonymous ? 'anonymous' : 'google';
-        const nextUsername =
-          this.userProfile.username ||
-          (!user.isAnonymous && user.displayName
-            ? user.displayName.trim().replace(/\s+/g, '_').slice(0, 32)
-            : getOrCreateGuestUsername());
-        const nextHandle =
-          this.userProfile.handle || `@${nextUsername.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
-        const nextName =
-          !user.isAnonymous && user.displayName && !this.userProfile.name
-            ? user.displayName
-            : this.userProfile.name;
 
-        let changed = false;
-        if (
-          this.userProfile.ownerUid !== uid ||
-          !this.userProfile.userId ||
-          this.userProfile.userId.startsWith('usr-zw-') ||
-          this.userProfile.username !== nextUsername ||
-          this.userProfile.handle !== nextHandle ||
-          this.userProfile.isGuest !== nextIsGuest ||
-          this.userProfile.authProvider !== nextProvider ||
-          nextName !== this.userProfile.name
-        ) {
-          this.userProfile = {
-            ...this.userProfile,
-            device_id: this.deviceId,
-            ownerUid: uid,
-            userId: uid,
-            username: nextUsername,
-            handle: nextHandle,
-            name: nextName,
-            avatarColor: this.userProfile.avatarColor || '#F27D26',
-            commuterBadge: this.userProfile.commuterBadge || 'Daily Commuter',
-            reputation_score: this.userProfile.reputation_score || 100,
-            createdAt: this.userProfile.createdAt || Date.now(),
-            isGuest: nextIsGuest,
-            authProvider: nextProvider,
-            updatedAt: Date.now(),
-          };
-          safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
-          this.ensureLocalUserInDirectory();
-          changed = true;
-        }
-        if (user.isAnonymous && !user.displayName && this.userProfile.username) {
-          await syncFirebaseDisplayName(this.userProfile.username);
-        }
-        if (changed) {
-          this.syncProfileToOutbox(false);
+        const googleRes =
+          !user.isAnonymous && user.email && this.isEffectivelyOnline()
+            ? await this.resolveGoogleAccountForUser(user)
+            : { isReturning: false, account: null };
+
+        if (!googleRes.account) {
+          const nextIsGuest = !!user.isAnonymous;
+          const nextProvider: 'anonymous' | 'google' = user.isAnonymous ? 'anonymous' : 'google';
+          const nextUsername =
+            this.userProfile.username ||
+            (!user.isAnonymous && user.displayName
+              ? user.displayName.trim().replace(/\s+/g, '_').slice(0, 32)
+              : getOrCreateGuestUsername());
+          const nextHandle =
+            this.userProfile.handle || `@${nextUsername.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
+          const nextName =
+            !user.isAnonymous && user.displayName && !this.userProfile.name
+              ? user.displayName
+              : this.userProfile.name;
+
+          let changed = false;
+          if (
+            this.userProfile.ownerUid !== uid ||
+            !this.userProfile.userId ||
+            this.userProfile.userId.startsWith('usr-zw-') ||
+            this.userProfile.username !== nextUsername ||
+            this.userProfile.handle !== nextHandle ||
+            this.userProfile.isGuest !== nextIsGuest ||
+            this.userProfile.authProvider !== nextProvider ||
+            nextName !== this.userProfile.name
+          ) {
+            this.userProfile = {
+              ...this.userProfile,
+              device_id: this.deviceId,
+              ownerUid: uid,
+              userId: uid,
+              username: nextUsername,
+              handle: nextHandle,
+              name: nextName,
+              avatarColor: this.userProfile.avatarColor || '#F27D26',
+              commuterBadge: this.userProfile.commuterBadge || 'Daily Commuter',
+              reputation_score: this.userProfile.reputation_score || 100,
+              createdAt: this.userProfile.createdAt || Date.now(),
+              isGuest: nextIsGuest,
+              authProvider: nextProvider,
+              updatedAt: Date.now(),
+            };
+            safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+            this.ensureLocalUserInDirectory();
+            changed = true;
+          }
+          if (user.isAnonymous && !user.displayName && this.userProfile.username) {
+            await syncFirebaseDisplayName(this.userProfile.username);
+          }
+          if (changed) {
+            this.syncProfileToOutbox(false);
+          }
         }
         if (this.isEffectivelyOnline()) {
           // Re-attach cloud listeners with authenticated UID (for notifications)
@@ -1440,6 +1473,135 @@ class FambaiOfflineStore {
       guestName: targetUsername,
       error: res.error,
       operationNotAllowed: res.operationNotAllowed,
+    };
+  }
+
+  private async resolveGoogleAccountForUser(
+    user: User
+  ): Promise<{ isReturning: boolean; account: ReturningAccountRecord | null }> {
+    if (!user || user.isAnonymous || !user.email || !this.isEffectivelyOnline()) {
+      return { isReturning: false, account: null };
+    }
+
+    if (
+      this.lastGoogleResolve &&
+      this.lastGoogleResolve.uid === user.uid &&
+      Date.now() - this.lastGoogleResolve.at < 8000
+    ) {
+      return this.lastGoogleResolve.result;
+    }
+
+    const existingFlight = this.accountLookupInFlight.get(user.uid);
+    if (existingFlight) {
+      return existingFlight;
+    }
+
+    const promise = (async () => {
+      const res = await lookupOrRegisterGoogleAccount(user, {
+        ...this.userProfile,
+        device_id: this.deviceId,
+      });
+
+      if (res.account) {
+        const previousDeviceId = this.deviceId;
+        if (res.isReturning && res.account.primaryDeviceId && res.account.primaryDeviceId !== this.deviceId) {
+          this.deviceId = res.account.primaryDeviceId;
+          try {
+            localStorage.setItem(STORAGE_KEYS.DEVICE_ID, this.deviceId);
+          } catch {
+            // Ignore storage error
+          }
+          if (previousDeviceId) {
+            this.commutersDirectory = this.commutersDirectory.filter(
+              (c) => c.device_id !== previousDeviceId
+            );
+          }
+        }
+
+        const mergedReputation = Math.max(
+          this.userProfile.reputation_score || 0,
+          res.account.reputation_score || 100
+        );
+        const mergedReportsCount = Math.max(
+          this.userProfile.reports_count || 0,
+          res.account.reports_count || 0
+        );
+
+        this.userProfile = {
+          ...this.userProfile,
+          device_id: this.deviceId,
+          ownerUid: user.uid,
+          userId: user.uid,
+          username: res.account.username,
+          handle: res.account.handle,
+          name: res.account.name ?? this.userProfile.name,
+          avatarColor: res.account.avatarColor || this.userProfile.avatarColor || '#F27D26',
+          commuterBadge: res.account.commuterBadge || this.userProfile.commuterBadge || 'Daily Commuter',
+          role: res.account.role || this.userProfile.role || 'commuter',
+          reputation_score: mergedReputation,
+          reports_count: mergedReportsCount,
+          createdAt: res.account.createdAt || this.userProfile.createdAt || Date.now(),
+          isGuest: false,
+          authProvider: 'google',
+          updatedAt: Date.now(),
+        };
+
+        safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+        this.ensureLocalUserInDirectory();
+        this.syncProfileToOutbox(false);
+        this.notifyChange();
+      }
+
+      this.lastGoogleResolve = {
+        uid: user.uid,
+        result: res,
+        at: Date.now(),
+      };
+      return res;
+    })();
+
+    this.accountLookupInFlight.set(user.uid, promise);
+    try {
+      return await promise;
+    } finally {
+      this.accountLookupInFlight.delete(user.uid);
+    }
+  }
+
+  public async loginWithGoogle(): Promise<{
+    user: User | null;
+    isReturning: boolean;
+    username?: string;
+    email?: string | null;
+    error?: string;
+  }> {
+    const res = await signInWithGoogle();
+    if (!res.user) {
+      return {
+        user: null,
+        isReturning: false,
+        error: res.error,
+      };
+    }
+
+    this.isExplicitlyLoggedOut = false;
+    try {
+      localStorage.removeItem(STORAGE_KEYS.EXPLICIT_LOGOUT);
+    } catch {
+      // Ignore storage error
+    }
+
+    this.currentAuthUid = res.user.uid;
+    this.backfillLocalOwnerUid(res.user.uid);
+    const resolved = await this.resolveGoogleAccountForUser(res.user);
+    await this.globalSyncNow({ force: true, reconcileLocal: true });
+    this.notifyChange();
+
+    return {
+      user: res.user,
+      isReturning: !!(res.isReturningHint || resolved.isReturning),
+      username: this.userProfile.username || res.user.displayName || undefined,
+      email: res.user.email,
     };
   }
 

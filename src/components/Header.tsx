@@ -20,7 +20,6 @@ import { useOfflineStore } from '../hooks/useOfflineStore';
 import { UserProfileModal } from './UserProfileModal';
 import { PWAInstallButton } from './PWAInstallButton';
 import { THREE_CURRENCIES, formatTimeAgo } from '../utils/formatters';
-import { signInWithGoogle } from '../services/firebase';
 
 export type NavTab = 'routes' | 'intercity' | 'transporters' | 'buzz' | 'ranks' | 'my-reports';
 
@@ -61,14 +60,17 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
   };
 
   const handleGoogleSignIn = async () => {
-    const res = await signInWithGoogle();
+    const res = await store.loginWithGoogle();
     if (res.error) {
       setSyncNotice(res.error);
-      setTimeout(() => setSyncNotice(null), 4000);
+      setTimeout(() => setSyncNotice(null), 4500);
     } else if (res.user) {
-      setSyncNotice(`Signed in as ${res.user.displayName || res.user.email || 'Commuter'} — syncing all local data!`);
-      await store.globalSyncNow({ force: true, reconcileLocal: true });
-      setTimeout(() => setSyncNotice(null), 4000);
+      setSyncNotice(
+        res.isReturning
+          ? `Welcome back, ${res.username || res.user.displayName || 'Commuter'}! Existing account (${res.email}) restored.`
+          : `Signed in as ${res.username || res.user.displayName || res.email || 'Commuter'} — all data synced!`
+      );
+      setTimeout(() => setSyncNotice(null), 5000);
     }
   };
 

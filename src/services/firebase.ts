@@ -5,6 +5,7 @@ import {
   linkWithPopup,
   onAuthStateChanged,
   signInAnonymously,
+  signInWithCredential,
   signInWithPopup,
   signOut,
   updateProfile,
@@ -18,6 +19,7 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
 const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 const GUEST_USERNAME_STORAGE_KEY = 'fambai_guest_username';
 const GUEST_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz0123456789';
 
@@ -214,13 +216,17 @@ export async function continueAsGuest(preferredGuestUsername?: string): Promise<
   }
 }
 
-export async function signInWithGoogle(): Promise<{ user: User | null; error?: string }> {
+export async function signInWithGoogle(): Promise<{
+  user: User | null;
+  isReturningHint?: boolean;
+  error?: string;
+}> {
   try {
     if (auth.currentUser && auth.currentUser.isAnonymous) {
       try {
         const linked = await linkWithPopup(auth.currentUser, googleProvider);
         anonAuthBlocked = false;
-        return { user: linked.user };
+        return { user: linked.user, isReturningHint: false };
       } catch (linkErr: any) {
         const linkCode = linkErr?.code || '';
         if (
@@ -229,6 +235,13 @@ export async function signInWithGoogle(): Promise<{ user: User | null; error?: s
           linkCode !== 'auth/provider-already-linked'
         ) {
           throw linkErr;
+        }
+        // Email already exists in Firebase Auth: reuse existing account credential without creating a duplicate account
+        const existingCred = GoogleAuthProvider.credentialFromError(linkErr);
+        if (existingCred) {
+          const credResult = await signInWithCredential(auth, existingCred);
+          anonAuthBlocked = false;
+          return { user: credResult.user, isReturningHint: true };
         }
       }
     }

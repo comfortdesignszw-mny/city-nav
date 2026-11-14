@@ -11,13 +11,27 @@ service cloud.firestore {
       allow get: if true;
     }
 
-    // Core Authentication & Ownership Helpers (Strict Owner-Only RLS for both Google & Guest Firebase accounts)
-    function isSignedIn() {
-      return request.auth != null;
+    // Core Authentication & Ownership Helpers (Strict Owner-Only RLS for Google & Anonymous Guest accounts)
+    function isGuestSession() {
+      return request.auth != null
+        && request.auth.uid is string
+        && 'firebase' in request.auth.token
+        && request.auth.token.firebase.sign_in_provider == 'anonymous'
+        && (!('email' in request.auth.token) || request.auth.token.email == null)
+        && (!('tenant' in request.auth.token.firebase) || request.auth.token.firebase.tenant == null);
     }
 
-    function isGuestSession() {
-      return isSignedIn() && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    function isVerifiedGoogleSession() {
+      return request.auth != null
+        && request.auth.uid is string
+        && 'email_verified' in request.auth.token
+        && request.auth.token.email_verified == true
+        && 'email' in request.auth.token
+        && request.auth.token.email is string;
+    }
+
+    function isSignedIn() {
+      return isGuestSession() || isVerifiedGoogleSession();
     }
 
     function isOwner(ownerUid) {
@@ -62,6 +76,25 @@ service cloud.firestore {
         && data.reports_count is number && data.reports_count >= 0 && data.reports_count <= 1000000
         && data.createdAt is number && data.createdAt > 0
         && data.updatedAt is number && data.updatedAt > 0;
+    }
+
+    function isValidUserAccount(data) {
+      return data.keys().hasAll(['ownerUid', 'email', 'primaryDeviceId', 'username', 'handle', 'avatarColor', 'commuterBadge', 'role', 'reputation_score', 'reports_count', 'createdAt', 'updatedAt', 'lastLoginAt'])
+        && data.keys().hasOnly(['ownerUid', 'email', 'primaryDeviceId', 'username', 'handle', 'name', 'avatarColor', 'commuterBadge', 'role', 'reputation_score', 'reports_count', 'createdAt', 'updatedAt', 'lastLoginAt'])
+        && isStrLen(data.ownerUid, 3, 128)
+        && isStrLen(data.email, 3, 160)
+        && isValidId(data.primaryDeviceId)
+        && isStrLen(data.username, 1, 40)
+        && isStrLen(data.handle, 1, 45)
+        && (!('name' in data) || isStrLen(data.name, 0, 60))
+        && isStrLen(data.avatarColor, 3, 20)
+        && isStrLen(data.commuterBadge, 1, 60)
+        && data.role in ['commuter', 'transporter']
+        && data.reputation_score is number && data.reputation_score >= 0 && data.reputation_score <= 1000000
+        && data.reports_count is number && data.reports_count >= 0 && data.reports_count <= 1000000
+        && data.createdAt is number && data.createdAt > 0
+        && data.updatedAt is number && data.updatedAt > 0
+        && data.lastLoginAt is number && data.lastLoginAt > 0;
     }
 
     function isValidPrivateContact(data) {
@@ -294,6 +327,28 @@ service cloud.firestore {
         && data.timestamp is number && data.timestamp > 0;
     }
 
+    // Owner-only Google email-verified account registry (prevents duplicate accounts on re-login)
+    match /accounts/{accountId} {
+      allow get: if isVerifiedGoogleSession() && isValidId(accountId) && (
+        (resource == null && accountId == request.auth.uid) ||
+        (resource != null && resource.data.ownerUid == request.auth.uid && resource.data.email == request.auth.token.email)
+      );
+      allow list: if isVerifiedGoogleSession()
+        && resource.data.email == request.auth.token.email
+        && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedGoogleSession() && isValidId(accountId) && accountId == request.auth.uid
+        && isValidUserAccount(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().email == request.auth.token.email;
+      allow update: if isVerifiedGoogleSession() && isOwner(existing().ownerUid) && isValidId(accountId) && accountId == request.auth.uid
+        && isValidUserAccount(incoming())
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['primaryDeviceId', 'username', 'handle', 'name', 'avatarColor', 'commuterBadge', 'role', 'reputation_score', 'reports_count', 'updatedAt', 'lastLoginAt']);
+      allow delete: if false;
+    }
+
     // Commuter public identities (read-only to peers; strict owner-only CRUD)
     match /commuters/{deviceId} {
       allow get: if isValidId(deviceId);
@@ -303,13 +358,14 @@ service cloud.firestore {
       allow update: if isOwner(existing().ownerUid) && isValidId(deviceId) && isValidCommuter(incoming())
         && incoming().device_id == existing().device_id
         && incoming().ownerUid == existing().ownerUid
-        && incoming().createdAt == existing().createdAt
-        && incoming().diff(existing()).affectedKeys().hasOnly(['userId', 'username', 'handle', 'name', 'avatarColor', 'commuterBadge', 'role', 'isGuest', 'authProvider', 'reputation_score', 'reports_count', 'updatedAt']);
+        && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['userId', 'username', 'handle', 'name', 'avatarColor', 'commuterBadge', 'role', 'isGuest', 'authProvider', 'reputation_score', 'reports_count', 'createdAt', 'updatedAt']);
       allow delete: if isOwner(existing().ownerUid);
 
       // Private PII subcollection (phone number strictly owner-only read & write)
       match /private/{docId} {
-        allow get, list: if isSignedIn() && isOwner(resource.data.ownerUid);
+        allow get: if isSignedIn() && isValidId(deviceId) && isValidId(docId) && (resource == null || isOwner(resource.data.ownerUid));
+        allow list: if isSignedIn() && isOwner(resource.data.ownerUid);
         allow create: if isSignedIn() && isValidId(deviceId) && isValidId(docId)
           && isValidPrivateContact(incoming()) && incoming().device_id == deviceId && incoming().ownerUid == request.auth.uid;
         allow update: if isOwner(existing().ownerUid) && isValidPrivateContact(incoming())
