@@ -11,9 +11,13 @@ service cloud.firestore {
       allow get: if true;
     }
 
-    // Core Authentication & Ownership Helpers (Strict Owner-Only RLS)
+    // Core Authentication & Ownership Helpers (Strict Owner-Only RLS for both Google & Guest Firebase accounts)
     function isSignedIn() {
       return request.auth != null;
+    }
+
+    function isGuestSession() {
+      return isSignedIn() && request.auth.token.firebase.sign_in_provider == 'anonymous';
     }
 
     function isOwner(ownerUid) {
@@ -42,7 +46,7 @@ service cloud.firestore {
 
     function isValidCommuter(data) {
       return data.keys().hasAll(['device_id', 'userId', 'ownerUid', 'username', 'handle', 'avatarColor', 'commuterBadge', 'role', 'reputation_score', 'reports_count', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['device_id', 'userId', 'ownerUid', 'username', 'handle', 'name', 'avatarColor', 'commuterBadge', 'role', 'reputation_score', 'reports_count', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['device_id', 'userId', 'ownerUid', 'username', 'handle', 'name', 'avatarColor', 'commuterBadge', 'role', 'isGuest', 'authProvider', 'reputation_score', 'reports_count', 'createdAt', 'updatedAt'])
         && isValidId(data.device_id)
         && isStrLen(data.userId, 3, 128)
         && isStrLen(data.ownerUid, 3, 128)
@@ -52,6 +56,8 @@ service cloud.firestore {
         && isStrLen(data.avatarColor, 3, 20)
         && isStrLen(data.commuterBadge, 1, 60)
         && data.role in ['commuter', 'transporter']
+        && (!('isGuest' in data) || data.isGuest is bool)
+        && (!('authProvider' in data) || data.authProvider in ['anonymous', 'google'])
         && data.reputation_score is number && data.reputation_score >= 0 && data.reputation_score <= 1000000
         && data.reports_count is number && data.reports_count >= 0 && data.reports_count <= 1000000
         && data.createdAt is number && data.createdAt > 0
@@ -298,7 +304,7 @@ service cloud.firestore {
         && incoming().device_id == existing().device_id
         && incoming().ownerUid == existing().ownerUid
         && incoming().createdAt == existing().createdAt
-        && incoming().diff(existing()).affectedKeys().hasOnly(['userId', 'username', 'handle', 'name', 'avatarColor', 'commuterBadge', 'role', 'reputation_score', 'reports_count', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['userId', 'username', 'handle', 'name', 'avatarColor', 'commuterBadge', 'role', 'isGuest', 'authProvider', 'reputation_score', 'reports_count', 'updatedAt']);
       allow delete: if isOwner(existing().ownerUid);
 
       // Private PII subcollection (phone number strictly owner-only read & write)

@@ -2,7 +2,7 @@
   "entities": {
     "CommuterProfile": {
       "title": "CommuterProfile",
-      "description": "Public anonymous device-linked commuter identity with assigned userId, ownerUid, username, handle, badge, and reputation score.",
+      "description": "Public anonymous guest or Google-linked commuter identity with assigned userId, ownerUid, guest username (e.g. guest_FxD12), handle, badge, and reputation score.",
       "type": "object",
       "properties": {
         "device_id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -14,6 +14,8 @@
         "avatarColor": { "type": "string", "minLength": 3, "maxLength": 20 },
         "commuterBadge": { "type": "string", "minLength": 1, "maxLength": 60 },
         "role": { "type": "string", "enum": ["commuter", "transporter"] },
+        "isGuest": { "type": "boolean" },
+        "authProvider": { "type": "string", "enum": ["anonymous", "google"] },
         "reputation_score": { "type": "number" },
         "reports_count": { "type": "number" },
         "createdAt": { "type": "number" },

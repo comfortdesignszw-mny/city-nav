@@ -77,16 +77,19 @@ function nonEmpty(val: string | undefined | null, maxLen: number): string | unde
 }
 
 function sanitizeCommuterForCloud(profile: UserProfile, uid: string): Record<string, any> {
+  const isAnon = auth.currentUser ? !!auth.currentUser.isAnonymous : profile.isGuest ?? true;
   return stripUndefined({
     device_id: profile.device_id,
     userId: (profile.userId || uid).slice(0, 128),
     ownerUid: uid,
-    username: nonEmpty(profile.username, 40) || 'Commuter',
-    handle: nonEmpty(profile.handle, 45) || '@commuter',
+    username: nonEmpty(profile.username, 40) || 'guest_User1',
+    handle: nonEmpty(profile.handle, 45) || '@guest_user1',
     name: profile.name !== undefined ? profile.name.slice(0, 60) : undefined,
     avatarColor: nonEmpty(profile.avatarColor, 20) || '#F27D26',
     commuterBadge: nonEmpty(profile.commuterBadge, 60) || 'Daily Commuter',
     role: profile.role === 'transporter' ? 'transporter' : 'commuter',
+    isGuest: typeof profile.isGuest === 'boolean' ? profile.isGuest : isAnon,
+    authProvider: profile.authProvider || (isAnon ? 'anonymous' : 'google'),
     reputation_score: Number(profile.reputation_score || 0),
     reports_count: Number(profile.reports_count || 0),
     createdAt: Number(profile.createdAt || Date.now()),

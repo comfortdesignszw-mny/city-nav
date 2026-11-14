@@ -289,6 +289,8 @@ export interface UserProfile {
   avatarColor: string;
   commuterBadge: string;
   role: 'commuter' | 'transporter';
+  isGuest?: boolean;
+  authProvider?: 'anonymous' | 'google';
   phone?: string;
   reputation_score: number;
   reports_count: number;

@@ -20,13 +20,15 @@ import {
   MapPin,
   Trash2,
   LogIn,
-  LogOut
+  LogOut,
+  Shuffle,
+  UserCheck
 } from 'lucide-react';
 import { useOfflineStore } from '../hooks/useOfflineStore';
 import { formatTimeAgo, formatCurrency, formatDisplayFare, getStatusConfig } from '../utils/formatters';
 import { PWAInstallButton } from './PWAInstallButton';
 import { AddRouteFareModal } from './AddRouteFareModal';
-import { signInWithGoogle, signOutCloud } from '../services/firebase';
+import { generateGuestUsername, signInWithGoogle, signOutCloud } from '../services/firebase';
 
 interface MyReportsViewProps {
   onSelectRoute: (routeId: string) => void;
@@ -138,6 +140,18 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
     setTimeout(() => setGlobalSyncBanner(null), 4000);
   };
 
+  const handleContinueAsGuest = async (regenerate = false) => {
+    const res = await store.activateGuestAccount(regenerate);
+    if (res.success) {
+      setUsernameInput(res.guestName);
+      setHandleInput(`@${res.guestName.toLowerCase()}`);
+      setGlobalSyncBanner(`Guest Account active: ${res.guestName} (Firebase RLS ID verified & local data synced!)`);
+    } else if (res.error) {
+      setGlobalSyncBanner(res.error);
+    }
+    setTimeout(() => setGlobalSyncBanner(null), 5000);
+  };
+
   return (
     <div className="space-y-5 pb-12">
       {/* SECTION 1: UNIFIED COMMUTER PROFILE & IDENTITY CARD */}
@@ -157,6 +171,15 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
                 </h2>
                 <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 bg-[#141414] text-white border border-[#141414]">
                   {profile.commuterBadge || 'Daily Commuter'}
+                </span>
+                <span
+                  className={`text-[10px] font-black uppercase tracking-wider px-2 py-0.5 border border-[#141414] ${
+                    !authStatus.uid || authStatus.isAnonymous
+                      ? 'bg-[#F27D26]/20 text-[#141414]'
+                      : 'bg-emerald-100 text-emerald-900'
+                  }`}
+                >
+                  {!authStatus.uid || authStatus.isAnonymous ? 'Guest Account' : 'Google Linked'}
                 </span>
               </div>
               <div className="flex items-center gap-2 text-xs font-bold text-stone-600 mt-0.5 flex-wrap">
@@ -245,14 +268,24 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
               </div>
 
               <div>
-                <label className="block text-[11px] font-black uppercase text-[#141414] mb-1">
-                  Username *
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[11px] font-black uppercase text-[#141414]">
+                    Username *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => handleUsernameChange(generateGuestUsername())}
+                    className="text-[10px] font-black uppercase text-[#F27D26] hover:text-[#141414] flex items-center gap-1 cursor-pointer"
+                  >
+                    <Shuffle className="w-3 h-3" />
+                    <span>Random Guest ID</span>
+                  </button>
+                </div>
                 <input
                   type="text"
                   value={usernameInput}
                   onChange={(e) => handleUsernameChange(e.target.value)}
-                  placeholder="e.g. harare_scout"
+                  placeholder="e.g. guest_FxD12 or harare_scout"
                   required
                   className="w-full px-3 py-2 text-xs font-bold border-2 border-[#141414] bg-white focus:outline-none shadow-[1px_1px_0px_0px_#141414]"
                 />
@@ -345,37 +378,67 @@ export const MyReportsView: React.FC<MyReportsViewProps> = ({ onSelectRoute }) =
             </div>
           </form>
         ) : (
-          <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414] flex flex-col sm:flex-row sm:items-center justify-between text-xs gap-2">
-            <div>
-              <span className="font-black text-[#141414] uppercase">Owner Role-Level Security (RLS) Active</span>
-              <p className="text-[11px] font-medium text-stone-600 mt-0.5">
-                Only you can edit or delete your submissions &amp; phone number. Others have read-only access.
-              </p>
+          <div className="p-3 bg-[#F5F5F0] border-2 border-[#141414] space-y-2 text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <span className="font-black text-[#141414] uppercase">
+                  {!authStatus.uid || authStatus.isAnonymous
+                    ? `Guest Cloud Identity (${profile.username}) • Owner RLS Active`
+                    : 'Google Verified • Owner Role-Level Security (RLS) Active'}
+                </span>
+                <p className="text-[11px] font-medium text-stone-600 mt-0.5">
+                  Only you can edit or delete your submissions &amp; phone number. Guest &amp; Google contributions sync globally.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[#141414] font-black text-xs uppercase bg-white px-2 py-1 border border-[#141414] whitespace-nowrap">
+                  {profile.reports_count} Contributions
+                </span>
+                {!authStatus.uid || authStatus.isAnonymous ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleContinueAsGuest(false)}
+                      className="px-2.5 py-1 bg-[#F27D26] hover:bg-[#d96615] text-white text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition"
+                    >
+                      <UserCheck className="w-3 h-3" />
+                      <span>{authStatus.uid ? 'Sync Guest Cloud' : 'Use Guest Account'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleContinueAsGuest(true)}
+                      className="px-2.5 py-1 bg-white hover:bg-[#141414] hover:text-white text-[#141414] text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition"
+                      title="Assign a new random guest username (e.g. guest_FxD12)"
+                    >
+                      <Shuffle className="w-3 h-3 text-[#F27D26]" />
+                      <span>New Guest ID</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleGoogleSignIn}
+                      className="px-2.5 py-1 bg-[#141414] hover:bg-[#F27D26] text-white text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition"
+                    >
+                      <LogIn className="w-3 h-3 text-[#F27D26]" />
+                      <span>{authStatus.uid ? 'Link Google Account' : 'Sign In with Google'}</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => signOutCloud()}
+                    className="px-2.5 py-1 bg-white hover:bg-red-50 text-red-700 text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition"
+                  >
+                    <LogOut className="w-3 h-3" />
+                    <span>Google Linked ({authStatus.email?.split('@')[0]})</span>
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[#141414] font-black text-xs uppercase bg-white px-2 py-1 border border-[#141414] whitespace-nowrap">
-                {profile.reports_count} Contributions
-              </span>
-              {!authStatus.uid || authStatus.isAnonymous ? (
-                <button
-                  type="button"
-                  onClick={handleGoogleSignIn}
-                  className="px-2.5 py-1 bg-[#141414] hover:bg-[#F27D26] text-white text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition"
-                >
-                  <LogIn className="w-3 h-3 text-[#F27D26]" />
-                  <span>{authStatus.uid ? 'Link Google Account' : 'Sign In with Google'}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => signOutCloud()}
-                  className="px-2.5 py-1 bg-white hover:bg-red-50 text-red-700 text-[10px] font-black uppercase border border-[#141414] flex items-center gap-1 cursor-pointer transition"
-                >
-                  <LogOut className="w-3 h-3" />
-                  <span>Google Linked ({authStatus.email?.split('@')[0]})</span>
-                </button>
-              )}
-            </div>
+            {syncStatus.anonAuthBlocked && !authStatus.uid && (
+              <div className="p-2 bg-amber-50 border border-amber-500 text-[11px] font-semibold text-amber-950">
+                To enable automatic Guest Account cloud sync without Google, turn on <strong>Anonymous</strong> in Firebase Console → Authentication → Sign-in method.
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -49,9 +49,14 @@ import { calculateDistanceKm, DEFAULT_USER_LOCATION } from '../utils/geoUtils';
 import { sqliteDb } from './sqliteDb';
 import {
   auth,
+  continueAsGuest,
   ensureCloudAuth,
+  generateGuestUsername,
   getCurrentAuthStatus,
+  getOrCreateGuestUsername,
+  saveGuestUsername,
   subscribeAuthState,
+  syncFirebaseDisplayName,
 } from './firebase';
 import {
   CloudSnapshotData,
@@ -182,20 +187,36 @@ class FambaiOfflineStore {
     // 1. Instant Cold-Start Offline Cache Hydration (zero internet required)
     this.initFromLocalCache();
 
-    // 2. Setup user profile with auto-assigned User ID + Device ID
+    // 2. Setup user profile with auto-assigned User ID + Device ID + random Guest username (e.g. guest_FxD12)
     const existingProfile = safeGet<UserProfile | null>(STORAGE_KEYS.USER_PROFILE, null);
-    const defaultSuffix = this.deviceId.slice(-4).toUpperCase();
+    const guestName = getOrCreateGuestUsername();
     const localAssignedUserId = `usr-${this.deviceId}`;
     if (existingProfile) {
+      const isUntouchedLegacyDefault =
+        existingProfile.username?.startsWith('Commuter_') &&
+        !existingProfile.name &&
+        !existingProfile.ownerUid;
+      const resolvedUsername = isUntouchedLegacyDefault
+        ? guestName
+        : existingProfile.username || guestName;
+      const resolvedHandle = isUntouchedLegacyDefault
+        ? `@${guestName.toLowerCase()}`
+        : existingProfile.handle || `@${resolvedUsername.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
+
       this.userProfile = {
         ...existingProfile,
         device_id: this.deviceId,
         userId: existingProfile.userId || existingProfile.ownerUid || localAssignedUserId,
-        username: existingProfile.username || `Commuter_${defaultSuffix}`,
-        handle: existingProfile.handle || `@commuter_${defaultSuffix.toLowerCase()}`,
+        username: resolvedUsername,
+        handle: resolvedHandle,
         avatarColor: existingProfile.avatarColor || '#F27D26',
         commuterBadge: existingProfile.commuterBadge || 'Daily Commuter',
         role: existingProfile.role || 'commuter',
+        isGuest:
+          existingProfile.isGuest !== undefined
+            ? existingProfile.isGuest
+            : existingProfile.authProvider !== 'google',
+        authProvider: existingProfile.authProvider || 'anonymous',
         updatedAt: existingProfile.updatedAt || Date.now(),
       };
       safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
@@ -203,11 +224,13 @@ class FambaiOfflineStore {
       this.userProfile = {
         device_id: this.deviceId,
         userId: localAssignedUserId,
-        username: `Commuter_${defaultSuffix}`,
-        handle: `@commuter_${defaultSuffix.toLowerCase()}`,
+        username: guestName,
+        handle: `@${guestName.toLowerCase()}`,
         avatarColor: '#F27D26',
         commuterBadge: 'Daily Commuter',
         role: 'commuter',
+        isGuest: true,
+        authProvider: 'anonymous',
         reputation_score: 100,
         reports_count: 0,
         createdAt: Date.now(),
@@ -274,7 +297,7 @@ class FambaiOfflineStore {
       clearTimeout(this.fastRetryTimer);
       this.fastRetryTimer = null;
     }
-    await ensureCloudAuth(true);
+    await ensureCloudAuth(true, this.userProfile.username);
     this.attachCloudListeners();
     await this.globalSyncNow({ force: true, reconcileLocal: true });
   }
@@ -385,24 +408,44 @@ class FambaiOfflineStore {
 
     let initialAuthHandled = false;
 
-    // Subscribe to Firebase Auth changes for auto-assigned cloud UID & dual-sync
+    // Subscribe to Firebase Auth changes for auto-assigned cloud UID (Guest or Google) & dual-sync
     subscribeAuthState(async (user) => {
       const uid = user?.uid || null;
       this.currentAuthUid = uid;
-      if (uid) {
+      if (uid && user) {
         initialAuthHandled = true;
         this.backfillLocalOwnerUid(uid);
+        const nextIsGuest = !!user.isAnonymous;
+        const nextProvider: 'anonymous' | 'google' = user.isAnonymous ? 'anonymous' : 'google';
+        const nextName =
+          !user.isAnonymous && user.displayName && !this.userProfile.name
+            ? user.displayName
+            : this.userProfile.name;
+
         let changed = false;
-        if (this.userProfile.ownerUid !== uid || !this.userProfile.userId || this.userProfile.userId.startsWith('usr-zw-')) {
+        if (
+          this.userProfile.ownerUid !== uid ||
+          !this.userProfile.userId ||
+          this.userProfile.userId.startsWith('usr-zw-') ||
+          this.userProfile.isGuest !== nextIsGuest ||
+          this.userProfile.authProvider !== nextProvider ||
+          nextName !== this.userProfile.name
+        ) {
           this.userProfile = {
             ...this.userProfile,
             ownerUid: uid,
             userId: uid,
+            name: nextName,
+            isGuest: nextIsGuest,
+            authProvider: nextProvider,
             updatedAt: Date.now(),
           };
           safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
           this.ensureLocalUserInDirectory();
           changed = true;
+        }
+        if (user.isAnonymous && !user.displayName && this.userProfile.username) {
+          await syncFirebaseDisplayName(this.userProfile.username);
         }
         if (changed) {
           this.syncProfileToOutbox(false);
@@ -420,7 +463,7 @@ class FambaiOfflineStore {
     });
 
     if (this.isEffectivelyOnline()) {
-      const user = await ensureCloudAuth(false);
+      const user = await ensureCloudAuth(false, this.userProfile.username);
       this.attachCloudListeners();
       if (!user || !initialAuthHandled) {
         await this.globalSyncNow({ force: false, reconcileLocal: !!user });
@@ -1217,7 +1260,10 @@ class FambaiOfflineStore {
   public updateUserProfile(updates: Partial<UserProfile>): UserProfile {
     let handle = updates.handle || this.userProfile.handle;
     if (updates.username && !updates.handle) {
-      handle = '@' + updates.username.trim().toLowerCase().replace(/\s+/g, '_');
+      handle = '@' + updates.username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    }
+    if (updates.username && /^guest_[A-Za-z0-9]{3,16}$/.test(updates.username.trim())) {
+      saveGuestUsername(updates.username.trim());
     }
     this.userProfile = {
       ...this.userProfile,
@@ -1234,10 +1280,77 @@ class FambaiOfflineStore {
         updatedAt: this.userProfile.updatedAt,
       });
     }
+    if (updates.username && this.isEffectivelyOnline()) {
+      syncFirebaseDisplayName(this.userProfile.username);
+    }
     this.ensureLocalUserInDirectory();
     this.enqueueWrite('profile_update', { ...this.userProfile }, true);
     this.notifyChange();
     return { ...this.userProfile };
+  }
+
+  public async activateGuestAccount(regenerate = false): Promise<{
+    success: boolean;
+    guestName: string;
+    error?: string;
+    operationNotAllowed?: boolean;
+  }> {
+    const currentName = this.userProfile.username;
+    const guestName = regenerate
+      ? generateGuestUsername()
+      : /^guest_[A-Za-z0-9]{3,16}$/.test(currentName)
+      ? currentName
+      : getOrCreateGuestUsername();
+
+    saveGuestUsername(guestName);
+
+    const shouldUseGuestName =
+      regenerate || !currentName || currentName.startsWith('Commuter_') || currentName === 'Commuter';
+    const targetUsername = shouldUseGuestName ? guestName : currentName;
+    const targetHandle = shouldUseGuestName
+      ? `@${guestName.toLowerCase()}`
+      : this.userProfile.handle || `@${targetUsername.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
+
+    this.userProfile = {
+      ...this.userProfile,
+      username: targetUsername,
+      handle: targetHandle,
+      isGuest: auth.currentUser ? auth.currentUser.isAnonymous : true,
+      authProvider: auth.currentUser && !auth.currentUser.isAnonymous ? 'google' : 'anonymous',
+      updatedAt: Date.now(),
+    };
+    safeSet(STORAGE_KEYS.USER_PROFILE, this.userProfile);
+    this.ensureLocalUserInDirectory();
+    this.enqueueWrite('profile_update', { ...this.userProfile }, false);
+    this.notifyChange();
+
+    if (!this.isEffectivelyOnline()) {
+      return {
+        success: false,
+        guestName: targetUsername,
+        error: `Guest ID ${targetUsername} saved offline in SQLite. It will auto-sync when internet connects.`,
+      };
+    }
+
+    const res = await continueAsGuest(targetUsername);
+    if (res.user) {
+      await syncFirebaseDisplayName(targetUsername);
+      const syncRes = await this.globalSyncNow({ force: true, reconcileLocal: true });
+      this.notifyChange();
+      return {
+        success: !syncRes.error,
+        guestName: targetUsername,
+        error: syncRes.error,
+      };
+    }
+
+    this.notifyChange();
+    return {
+      success: false,
+      guestName: targetUsername,
+      error: res.error,
+      operationNotAllowed: res.operationNotAllowed,
+    };
   }
 
   public updatePhone(phone: string): void {
@@ -2815,7 +2928,7 @@ class FambaiOfflineStore {
     this.globalSyncPromise = (async () => {
       let pushed = 0;
       try {
-        await ensureCloudAuth(force);
+        await ensureCloudAuth(force, this.userProfile.username);
         pushed += await this.flushOutbox(force);
 
         this.isSyncing = true;
